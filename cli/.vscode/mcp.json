@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "kontinue": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "d:/FY2026/Workspace/Mem/cli/bin/run.js",
+        "mcp"
+      ]
+    }
+  }
+}

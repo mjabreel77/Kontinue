@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kontinue": {
+      "command": "npx",
+      "args": ["kontinue", "mcp"],
+      "env": {}
+    }
+  }
+}

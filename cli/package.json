@@ -1,0 +1,55 @@
+{
+  "name": "kontinue",
+  "version": "0.1.0",
+  "description": "Persistent memory and execution-tracing layer for AI coding agents",
+  "type": "module",
+  "bin": {
+    "kontinue": "./bin/run.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "lint": "eslint src --ext .ts",
+    "clean": "rimraf dist"
+  },
+  "oclif": {
+    "bin": "kontinue",
+    "dirname": "kontinue",
+    "commands": "./dist/commands",
+    "plugins": [],
+    "topicSeparator": " "
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "/bin",
+    "/dist",
+    "/oclif.manifest.json"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "memory",
+    "developer-tools",
+    "mcp"
+  ],
+  "license": "EL-2.0",
+  "dependencies": {
+    "@inquirer/prompts": "^8.3.2",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@oclif/core": "^4.9.0",
+    "chalk": "^5.6.2",
+    "cosmiconfig": "^9.0.1",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "rimraf": "^6.1.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
