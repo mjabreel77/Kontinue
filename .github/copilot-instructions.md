@@ -49,9 +49,18 @@ If there are in-progress tasks from a previous session, **resume them** unless t
 - **Checkpoint every 15 minutes** or after any significant step via `kontinue_checkpoint`
 - **Persist as you go** — don't batch observations or decisions for later
 - One task `in_progress` at a time. Complete it before starting the next.
+- **Self-monitor for context length.** If the conversation is long (many exchanges, large files read, many tool calls), call `kontinue_write_handoff` proactively — do not wait for compaction to happen.
 
 ### Ending a session
 Call `kontinue_write_handoff` with a summary that a cold agent can act on immediately. Name files, functions, exact state. The handoff is the contract between you and the next agent.
+
+### Pre-compaction triggers — call `kontinue_write_handoff` when ANY of these are true:
+- The conversation has had many back-and-forth exchanges
+- You have just completed a major task or milestone
+- You are about to read many large files or make many tool calls
+- You feel uncertain whether there will be room to finish the current task
+
+Do not wait to be told. **A handoff written before compaction is infinitely more useful than one that never gets written.**
 
 ---
 
@@ -177,6 +186,7 @@ Call `kontinue_write_handoff` at session end. The summary must answer: What was 
 - **Chat-as-notebook**: Writing long observations into the conversation instead of Kontinue.
 - **Permission-seeking**: Asking "should I do X?" for obvious next steps. Just do it.
 - **Skipping plans for multi-step work**: Starting tasks directly without a plan when the goal has 3+ steps or multiple phases. Create the plan first — do not wait to be told.
+- **Waiting for compaction to write a handoff**: Handoffs must be written proactively — when the conversation is long, after a major milestone, or before a large block of work. By the time compaction happens, it is too late.
 - **Amnesia after compaction**: Asking "what were we working on?" instead of reading Kontinue.
 - **Bare tasks**: Adding tasks without descriptions or closing them without outcomes.
 - **Bare decisions**: Logging decisions without rationale, alternatives, or file references.

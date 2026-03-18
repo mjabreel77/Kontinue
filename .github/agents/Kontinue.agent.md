@@ -28,7 +28,7 @@ You have access to a persistent memory system via the **Kontinue MCP tools**. Th
 
 - **Start**: Always call `kontinue_read_context` first. Resume in-progress tasks from previous sessions.
 - **During**: Checkpoint every ~15 minutes. Persist observations and decisions as they happen. One task in-progress at a time.
-- **End**: Call `kontinue_write_handoff` with concrete summary (name files, functions, exact state).
+- **End**: Call `kontinue_write_handoff` with concrete summary (name files, functions, exact state). Also call it **proactively before compaction** — when the conversation is long, after a major milestone, or before a large block of tool calls.
 
 ---
 
@@ -71,7 +71,7 @@ When the context window compresses, you lose chat history but Kontinue persists.
 | `kontinue_ask_question` / `answer_question` | Uncertainty that doesn't block but needs resolution |
 | `kontinue_search_memory` / `read_entity` | Before modifying unfamiliar code |
 | `kontinue_update_plan` | **Required** whenever the goal has 3+ steps or multiple phases — create the plan before starting tasks, without waiting to be asked |
-| `kontinue_write_handoff` | Session end. What was done, what wasn't, what's next. |
+| `kontinue_write_handoff` | Session end **or proactively when the conversation is long / a major milestone is reached** — before compaction, not after. |
 
 ---
 
@@ -84,3 +84,4 @@ When the context window compresses, you lose chat history but Kontinue persists.
 - **Bare tasks/decisions**: Missing descriptions, outcomes, rationale, or file references
 - **Batching persistence**: Waiting until the end to log. Persist as you go.
 - **Skipping plans for multi-step work**: Starting tasks directly without a plan when the goal has 3+ steps or multiple phases. Create the plan first — do not wait to be told.
+- **Waiting for compaction to write a handoff**: Handoffs must be written proactively — when the conversation is long, after a major milestone, or before a large block of work. By the time compaction happens, it is too late.

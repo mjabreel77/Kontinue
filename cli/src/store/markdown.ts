@@ -237,9 +237,18 @@ If there are in-progress tasks from a previous session, **resume them** unless t
 - **Checkpoint every 15 minutes** or after any significant step via \`kontinue_checkpoint\`
 - **Persist as you go** — don't batch observations or decisions for later
 - One task \`in_progress\` at a time. Complete it before starting the next.
+- **Self-monitor for context length.** If the conversation is long (many exchanges, large files read, many tool calls), call \`kontinue_write_handoff\` proactively — do not wait for compaction to happen.
 
 ### Ending a session
 Call \`kontinue_write_handoff\` with a summary that a cold agent can act on immediately. Name files, functions, exact state.
+
+### Pre-compaction triggers — call \`kontinue_write_handoff\` when ANY of these are true:
+- The conversation has had many back-and-forth exchanges
+- You have just completed a major task or milestone
+- You are about to read many large files or make many tool calls
+- You feel uncertain whether there will be room to finish the current task
+
+Do not wait to be told. **A handoff written before compaction is infinitely more useful than one that never gets written.**
 
 ---
 
@@ -284,7 +293,7 @@ When the context window compresses, **you lose chat history but Kontinue persist
 | \`kontinue_ask_question\` / \`answer_question\` | Uncertainty that doesn't block but needs resolution |
 | \`kontinue_search_memory\` | Before modifying unfamiliar code. Pass a keyword to search. |
 | \`kontinue_update_plan\` | **Required** whenever the goal has 3+ steps or multiple phases — create the plan before starting tasks, without waiting to be asked |
-| \`kontinue_write_handoff\` | Session end. What was done, what wasn't, what's next. |
+| \`kontinue_write_handoff\` | Session end **or proactively when the conversation is long / a major milestone is reached** — before compaction, not after. |
 
 ---
 
@@ -298,6 +307,7 @@ When the context window compresses, **you lose chat history but Kontinue persist
 - **Batching persistence**: Waiting until the end to log. Persist as you go.
 - **Context pollution**: Never resolving observations or superseding outdated decisions. Clean up as you go.
 - **Skipping plans for multi-step work**: Starting tasks directly without a plan when the goal has 3+ steps or multiple phases. Create the plan first — do not wait to be told.
+- **Waiting for compaction to write a handoff**: Handoffs must be written proactively — when the conversation is long, after a major milestone, or before a large block of work. By the time compaction happens, it is too late.
 - **Skipping plans for multi-step work**: Starting tasks directly without a plan when the goal has 3+ steps or multiple phases. Create the plan first — do not wait to be told.
 `
 }
@@ -341,9 +351,9 @@ When the user gives you a goal:
 
 Chat is a communication gate, not a notebook. Persist everything that matters into Kontinue tools. Only display summaries and outcomes to the user.
 
-## 5. End Session
+## 5. Write a Handoff Early
 
-Call \`kontinue_write_handoff\` with: what was done (name files), what wasn't (exact state), the single next action.
+Call \`kontinue_write_handoff\` at session end — but also **whenever the conversation is getting long**, after any major milestone, or before a large block of work. Do not wait for compaction. By the time the context compresses, your chance to write a handoff is gone.
 `
 
 export function writeAgentInstructions(cwd: string, agents: string[]): string[] {
