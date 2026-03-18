@@ -142,6 +142,8 @@ When a decision becomes outdated, call `kontinue_supersede_decision` with the ol
 ### Observations
 Call `kontinue_add_observation` for mid-task discoveries that are not decisions and not blockers. Always include `task_title` and `files`.
 
+**Use observations for:** bugs found, audit findings, constraints discovered, scope clarifications, unexpected code behaviour, security issues, anything you would otherwise only say in chat.
+
 When an observation has been addressed (bug fixed, constraint removed), call `kontinue_resolve_observation` to clean it from active context.
 
 ### Memory Lookup
@@ -200,6 +202,7 @@ Also call it **proactively** — do not wait for session end:
 - **Bare decisions**: Logging decisions without rationale, alternatives, or file references.
 - **Skipping session start**: Diving into work without `kontinue_read_context`.
 - **Batching persistence**: Waiting until the end to log observations and decisions. Persist as you go.
+- **Findings in chat only**: Describing a bug, constraint, or audit finding in the conversation without logging it as an observation. Chat is ephemeral; observations persist.
 - **Context pollution**: Never resolving observations or superseding outdated decisions. Clean up as you go — stale context is worse than no context.
 
 ---

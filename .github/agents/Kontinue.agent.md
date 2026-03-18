@@ -65,7 +65,7 @@ When the context window compresses, you lose chat history but Kontinue persists.
 | `kontinue_read_context` | Always first. After compaction. |
 | `kontinue_update_task` | Add (with description), start, done (with outcome), abandon |
 | `kontinue_log_decision` | Chose one approach over another. Always: rationale, alternatives, context, files, tags |
-| `kontinue_add_observation` | Mid-task discovery. Always: task_title, files |
+| `kontinue_add_observation` | **Any** finding, bug, constraint, scope clarification, or discovery — not just generic mid-task notes. Always include task_title and files. If you'd otherwise say it only in chat, it belongs here. |
 | `kontinue_checkpoint` | Every ~15 min or after significant step |
 | `kontinue_flag_blocker` | Cannot proceed without external input |
 | `kontinue_ask_question` / `answer_question` | Uncertainty that doesn't block but needs resolution |
@@ -85,3 +85,4 @@ When the context window compresses, you lose chat history but Kontinue persists.
 - **Batching persistence**: Waiting until the end to log. Persist as you go.
 - **Skipping plans for multi-step work**: Starting tasks directly without a plan when the goal has 3+ steps or multiple phases. Create the plan first — do not wait to be told.
 - **Waiting for compaction to write a handoff**: Handoffs must be written proactively — when the conversation is long, after a major milestone, or before a large block of work. By the time compaction happens, it is too late.
+- **Findings in chat only**: Describing a bug, constraint, or audit finding in chat without logging it as an observation. Chat is ephemeral; observations persist.
