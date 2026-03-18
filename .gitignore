@@ -2,6 +2,7 @@
 PROPOSAL.md
 .kontinuerc.json
 DESIGN.md
+PROPOSAL.md
 node_modules/
 dist/
 oclif.manifest.json
