@@ -91,9 +91,9 @@ When the user gives you a task:
 
 ### Step 2: Decompose and Plan
 - Break the goal into concrete, executable steps
+- If the goal has 3 or more steps or spans multiple phases, **create a plan immediately** with `kontinue_update_plan` — do not wait to be asked
 - If a step requires research first, do the research — don't ask if you should
 - If there are dependencies, note them in the task description
-- Use `kontinue_update_plan` for multi-step work that spans beyond a single task
 
 ### Step 3: Execute
 - **Start** the task before beginning work
@@ -144,14 +144,17 @@ Call `kontinue_search_memory` with a keyword (e.g. "auth", "migration") before m
 - `kontinue_answer_question` — resolve a previously logged question
 
 ### Plans — When and How
-Use `kontinue_update_plan` when work spans **multiple tasks** or requires a structured sequence beyond a single task's scope:
-- An audit that produces many findings needing individual fixes
-- A feature that requires schema changes, API updates, and UI work
-- A refactoring effort with multiple phases
+**Always create a plan before starting any work that spans multiple tasks.** You do not wait for the user to say "make a plan" — you detect the need from the goal itself.
 
-**Workflow:** Create a plan with `add`, mark steps done with `step_done` as you complete them. Plans surface in `read_context` brief mode so any agent can see the bigger picture and know what comes next.
+Create a plan whenever:
+- The goal has 3 or more distinct steps
+- Work spans multiple files, layers, or phases
+- An audit, refactor, or feature touches several components
+- The user's request implies a sequence even without explicitly mentioning a plan
 
-**Tasks vs Plans:** A task is a single unit of work. A plan is a roadmap spanning multiple tasks. Create a plan first, then create individual tasks for each step as you begin working on them.
+Do **not** jump straight into tasks for multi-step work. The plan is the roadmap; individual tasks are the execution units. Create the plan first with `add`, then start tasks one at a time as you reach each step, marking steps done with `step_done`.
+
+Plans surface in `read_context` brief mode so any agent can see the bigger picture and know what comes next. Mark the plan `complete` when all steps are done.
 
 ### Checkpoints
 Call `kontinue_checkpoint` every ~15 minutes or after any significant step. Write concrete state, not vague summaries.
@@ -173,6 +176,7 @@ Call `kontinue_write_handoff` at session end. The summary must answer: What was 
 - **Report and stop**: Producing analysis without acting on it. If you find bugs, fix them.
 - **Chat-as-notebook**: Writing long observations into the conversation instead of Kontinue.
 - **Permission-seeking**: Asking "should I do X?" for obvious next steps. Just do it.
+- **Skipping plans for multi-step work**: Starting tasks directly without a plan when the goal has 3+ steps or multiple phases. Create the plan first — do not wait to be told.
 - **Amnesia after compaction**: Asking "what were we working on?" instead of reading Kontinue.
 - **Bare tasks**: Adding tasks without descriptions or closing them without outcomes.
 - **Bare decisions**: Logging decisions without rationale, alternatives, or file references.

@@ -69,7 +69,7 @@ When the context window compresses, you lose chat history but Kontinue persists.
 | `kontinue_flag_blocker` | Cannot proceed without external input |
 | `kontinue_ask_question` / `answer_question` | Uncertainty that doesn't block but needs resolution |
 | `kontinue_search_memory` / `read_entity` | Before modifying unfamiliar code |
-| `kontinue_update_plan` | Multi-step work spanning multiple tasks |
+| `kontinue_update_plan` | **Required** whenever the goal has 3+ steps or multiple phases — create the plan before starting tasks, without waiting to be asked |
 | `kontinue_write_handoff` | Session end. What was done, what wasn't, what's next. |
 
 ---
@@ -82,3 +82,4 @@ When the context window compresses, you lose chat history but Kontinue persists.
 - **Amnesia after compaction**: Asking "what were we working on?" instead of reading Kontinue
 - **Bare tasks/decisions**: Missing descriptions, outcomes, rationale, or file references
 - **Batching persistence**: Waiting until the end to log. Persist as you go.
+- **Skipping plans for multi-step work**: Starting tasks directly without a plan when the goal has 3+ steps or multiple phases. Create the plan first — do not wait to be told.
