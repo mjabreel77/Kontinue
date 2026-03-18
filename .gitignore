@@ -1,0 +1,8 @@
+.kontinue/
+PROPOSAL.md
+.kontinuerc.json
+DESIGN.md
+node_modules/
+dist/
+oclif.manifest.json
+*.tsbuildinfo

@@ -26,7 +26,7 @@ export default class TaskAdd extends Command {
     const inProgress = getAllOpenTasks(project.id).filter(t => t.status === 'in-progress')
     const todo = getAllOpenTasks(project.id).filter(t => t.status === 'todo')
     const done = getTasksByStatus(project.id, 'done')
-    rewriteTaskList(inProgress, todo, done)
+    rewriteTaskList(cwd, inProgress, todo, done)
 
     ok(`Task added: "${task.title}"`)
   }

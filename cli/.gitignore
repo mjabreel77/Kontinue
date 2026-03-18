@@ -2,3 +2,7 @@ node_modules/
 dist/
 oclif.manifest.json
 *.tsbuildinfo
+.kontinue/
+PROPOSAL.md
+.kontinuerc.json
+DESIGN.md

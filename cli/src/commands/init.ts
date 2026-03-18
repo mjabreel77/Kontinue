@@ -1,10 +1,11 @@
 import { Command, Flags } from '@oclif/core'
 import { input, checkbox } from '@inquirer/prompts'
-import { createProject, findProjectByPath } from '../store/queries.js'
+import { createProject, findProjectByPath, deleteProject } from '../store/queries.js'
 import { writeConfig, loadConfig, writeAgentMcpConfigs, type AgentTarget } from '../utils/config.js'
-import { writeAgentInstructions } from '../store/markdown.js'
+import { writeAgentInstructions, writeIdentity } from '../store/markdown.js'
 import { ok, warn } from '../utils/display.js'
 import { basename, resolve } from 'node:path'
+import { installPostCommitHook } from '../utils/git.js'
 
 export default class Init extends Command {
   static description = 'Initialize Kontinue memory for this project'
@@ -12,6 +13,7 @@ export default class Init extends Command {
   static flags = {
     name: Flags.string({ char: 'n', description: 'Project name' }),
     description: Flags.string({ char: 'd', description: 'Short project description' }),
+    force: Flags.boolean({ char: 'f', description: 'Reset existing project record and reinitialize (preserves nothing)' }),
   }
 
   async run(): Promise<void> {
@@ -20,8 +22,12 @@ export default class Init extends Command {
 
     const existing = findProjectByPath(cwd)
     if (existing) {
-      warn(`Already initialized as "${existing.name}". Memory store is at ~/.kontinue/`)
-      return
+      if (!flags.force) {
+        warn(`Already initialized as "${existing.name}". Use --force to reinitialize, or run: kontinue setup`)
+        return
+      }
+      deleteProject(existing.id)
+      warn(`Existing project "${existing.name}" removed — reinitializing...`)
     }
 
     const existingConfig = await loadConfig(cwd)
@@ -53,6 +59,7 @@ export default class Init extends Command {
       description: description || undefined,
       techStack: techStack || undefined,
     })
+    writeIdentity(cwd, name, description || undefined, techStack || undefined)
 
     if (agents.length > 0) {
       const mcpWritten = writeAgentMcpConfigs(cwd, agents)
@@ -67,6 +74,10 @@ export default class Init extends Command {
 
     ok(`Initialized "${name}" — memory store ready`)
     ok('Config written to .kontinuerc.json')
+
+    const hookPath = installPostCommitHook(cwd)
+    if (hookPath) ok(`Git hook installed → .git/hooks/post-commit`)
+
     ok('Run: kontinue start')
   }
 }

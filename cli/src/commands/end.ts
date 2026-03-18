@@ -49,7 +49,7 @@ export default class End extends Command {
 
     // Dual-write: persist handoff as .md file
     const updated = { ...session, ended_at: now.toISOString(), handoff_note: handoffNote, blockers, end_commit: getCommit(cwd) }
-    writeSession(updated)
+    writeSession(cwd, updated)
 
     // Index handoff into memory chunks
     if (handoffNote) {

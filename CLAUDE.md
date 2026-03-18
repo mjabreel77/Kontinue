@@ -179,3 +179,35 @@ Call `kontinue_write_handoff` at session end. The summary must answer: What was 
 - **Skipping session start**: Diving into work without `kontinue_read_context`.
 - **Batching persistence**: Waiting until the end to log observations and decisions. Persist as you go.
 - **Context pollution**: Never resolving observations or superseding outdated decisions. Clean up as you go — stale context is worse than no context.
+
+---
+
+## 7. Developer Signals
+
+Developers can send you real-time signals mid-session via the CLI (`kontinue signal`) or the web dashboard. Signals are injected automatically into your tool responses — you will see them as:
+
+```
+> **SIGNAL FROM DEVELOPER** — Read and act on this:
+> [MESSAGE] please prioritize the auth task
+>
+> Call `kontinue_acknowledge_signal` after you have processed this.
+```
+
+### Signal types
+- **MESSAGE** — free-text instruction. Read it and act accordingly.
+- **PRIORITY** — reprioritize to the named task. Start it if not already in progress.
+- **ABORT** _(URGENT)_ — stop your current task immediately. Check signals and `read_context` for new instructions.
+- **ANSWER** — the developer answered one of your open questions. Update your understanding and continue.
+
+### When you receive a signal
+1. **Read it immediately** — it represents a real-time instruction from the developer
+2. **Act on it** — reprioritize, answer, or change course as instructed
+3. **Acknowledge it** — call `kontinue_acknowledge_signal` so the developer knows you received it
+4. If the signal conflicts with your current task, log a decision explaining the trade-off
+
+### Checking for signals explicitly
+Call `kontinue_check_signals` to explicitly poll for pending signals. Do this:
+- Between tasks (after completing one, before starting the next)
+- When you have been working for more than 15 minutes without any signal injection
+- Whenever the status line shows "N signals pending"
+

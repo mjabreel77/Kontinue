@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "kontinue": {
+      "command": "kontinue",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

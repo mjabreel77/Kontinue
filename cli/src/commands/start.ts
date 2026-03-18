@@ -8,9 +8,10 @@ import {
   getAllOpenTasks,
   getRecentDecisions,
   getChunkCount,
+  closeStaleSessions,
 } from '../store/queries.js'
 import {
-  printHeader,
+  printBanner,
   printHandoff,
   printTaskSection,
   printDecisions,
@@ -28,6 +29,12 @@ export default class Start extends Command {
     const cwd = resolve(process.cwd())
     const project = requireProject(cwd)
 
+    // Auto-close any sessions that have been open >2h with no handoff (zombie sessions)
+    const closed = closeStaleSessions(project.id, 2)
+    if (closed > 0) {
+      warn(`${closed} stale session${closed > 1 ? 's' : ''} auto-closed (no handoff written — context likely overflowed)`)
+    }
+
     const active = getActiveSession(project.id)
     if (active) {
       warn(`Session already active (started ${active.started_at}). Run: kontinue end`)
@@ -41,7 +48,7 @@ export default class Start extends Command {
 
     const branch = session.branch
     const branchLabel = branch && branch !== 'HEAD' ? ` · ${chalk.cyan(branch)}` : ''
-    printHeader(project.name, `Session started · ${now}${branchLabel}`)
+    printBanner(project.name, session.branch, session.start_commit)
 
     // Show last handoff if any
     const last = getLastSession(project.id)

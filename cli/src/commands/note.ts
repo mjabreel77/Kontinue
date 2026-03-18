@@ -21,7 +21,7 @@ export default class Note extends Command {
     const note = addNote(project.id, args.content, session?.id)
 
     // Dual-write: write note .md file
-    writeNote(args.content, note.created_at)
+    writeNote(cwd, args.content, note.created_at)
 
     // Index into memory chunks
     upsertChunk(project.id, 'note', note.id, args.content)

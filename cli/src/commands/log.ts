@@ -31,9 +31,13 @@ export default class Log extends Command {
         lastDate = date
       }
       console.log()
-      console.log(`  ${chalk.blue('🔵')}  ${chalk.bold(d.summary)}`)
-      if (d.rationale) console.log(chalk.dim(`      ${d.rationale}`))
+      const branchStr = d.branch ? chalk.dim(` [${d.branch}${d.git_commit ? `@${d.git_commit}` : ''}]`) : ''
+      const tagStr = d.tags ? chalk.dim(`  • ${d.tags}`) : ''
+      console.log(`  ${chalk.blue('🔵')}  ${chalk.bold(d.summary)}${branchStr}${tagStr}`)
+      if (d.context)      console.log(chalk.dim(`      Context: ${d.context}`))
+      if (d.rationale)    console.log(chalk.dim(`      Why: ${d.rationale}`))
       if (d.alternatives) console.log(chalk.dim(`      Considered: ${d.alternatives}`))
+      if (d.files)        console.log(chalk.dim(`      Files: ${d.files}`))
     }
     console.log()
   }
