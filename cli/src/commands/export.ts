@@ -19,7 +19,7 @@ const ALL_SECTIONS = ['summary', 'tasks', 'decisions', 'handoffs', 'observations
 type SectionKey = typeof ALL_SECTIONS[number]
 
 export default class Export extends Command {
-  static description = 'Export a Markdown report of decisions, open tasks, and recent session handoffs'
+  static description = 'Export a report of decisions, open tasks, handoffs, and observations'
 
   static flags = {
     days: Flags.integer({

@@ -34,7 +34,12 @@
     "developer-tools",
     "mcp"
   ],
-  "license": "EL-2.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mjabreel77/Kontinue.git"
+  },
+  "homepage": "https://github.com/mjabreel77/Kontinue#readme",
   "dependencies": {
     "@inquirer/prompts": "^8.3.2",
     "@modelcontextprotocol/sdk": "^1.27.1",

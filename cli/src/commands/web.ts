@@ -1,7 +1,7 @@
 import { Command, Flags } from '@oclif/core'
 import { createServer } from 'node:http'
 import { resolve } from 'node:path'
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { requireProject } from '../utils/project.js'
 import { handleApi, handleSSE } from '../web/api.js'
 import { getDashboardHtml } from '../web/dashboard.js'
@@ -58,11 +58,10 @@ export default class Web extends Command {
 
       if (!flags['no-open']) {
         try {
-          // Windows, macOS, Linux
           const platform = process.platform
-          if (platform === 'win32')  execSync(`start ${url}`, { stdio: 'ignore' })
-          else if (platform === 'darwin') execSync(`open ${url}`, { stdio: 'ignore' })
-          else execSync(`xdg-open ${url}`, { stdio: 'ignore' })
+          if (platform === 'win32')  execFileSync('cmd', ['/c', 'start', '', url], { stdio: 'ignore' })
+          else if (platform === 'darwin') execFileSync('open', [url], { stdio: 'ignore' })
+          else execFileSync('xdg-open', [url], { stdio: 'ignore' })
         } catch {
           // Browser open is best-effort
         }

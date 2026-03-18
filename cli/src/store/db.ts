@@ -64,23 +64,29 @@ function migrate(db: DatabaseSync): void {
       id           INTEGER PRIMARY KEY AUTOINCREMENT,
       project_id   INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       session_id   INTEGER REFERENCES sessions(id),
+      task_id      INTEGER,
       summary      TEXT NOT NULL,
       rationale    TEXT,
       alternatives TEXT,
       context      TEXT,
       files        TEXT,
       tags         TEXT,
+      confidence   TEXT NOT NULL DEFAULT 'confirmed',
+      status       TEXT NOT NULL DEFAULT 'active',
+      superseded_by INTEGER,
       created_at   TEXT NOT NULL DEFAULT (datetime('now')),
       branch       TEXT,
       git_commit   TEXT
     );
 
     CREATE TABLE IF NOT EXISTS notes (
-      id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      session_id INTEGER REFERENCES sessions(id),
-      content    TEXT NOT NULL,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      session_id  INTEGER REFERENCES sessions(id),
+      task_id     INTEGER,
+      content     TEXT NOT NULL,
+      resolved_at TEXT,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS memory_chunks (
