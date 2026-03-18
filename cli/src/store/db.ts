@@ -179,6 +179,8 @@ function migrate(db: DatabaseSync): void {
   // Additive migrations: add new columns to existing tables when upgrading.
   // ALTER TABLE ADD COLUMN is a no-op if the column already exists in SQLite 3.37+,
   // but older versions throw. We guard with a runtime check.
+  // SECURITY NOTE: table/column names here are hardcoded constants — never pass
+  // user-supplied values to addColumnIfMissing (SQL injection via identifier).
   const addColumnIfMissing = (table: string, column: string, type: string) => {
     const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
     if (!cols.some(c => c.name === column)) {

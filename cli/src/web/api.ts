@@ -31,7 +31,17 @@ import type { Project } from '../types.js'
 function parseJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let body = ''
-    req.on('data', (chunk: Buffer) => { body += chunk.toString() })
+    let size = 0
+    const MAX = 1024 * 1024  // 1 MB
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > MAX) {
+        req.destroy()
+        reject(new Error('Request body too large (max 1 MB)'))
+        return
+      }
+      body += chunk.toString()
+    })
     req.on('end', () => {
       try { resolve(JSON.parse(body) as Record<string, unknown>) }
       catch (e) { reject(e) }

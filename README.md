@@ -32,7 +32,7 @@ Everything is dual-written: SQLite (queryable, fast) + `.kontinue/*.md` files (h
 
 ## Installation
 
-**Requirements:** Node.js ≥ 20
+**Requirements:** Node.js ≥ 22.13 (LTS)
 
 ```bash
 npm install -g kontinue
