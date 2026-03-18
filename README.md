@@ -2,7 +2,15 @@
 
 > Persistent memory and execution-tracing layer for AI coding agents.
 
-AI coding agents are powerful but amnesiac — every new chat is a blank slate. Kontinue gives them structured, queryable, session-spanning memory so they can pick up exactly where they left off — and lets you send them real-time signals mid-session without breaking their flow.
+**The problem:** AI coding agents are powerful but amnesiac. Every new chat session is a blank slate. Switch agents mid-task and all context is gone. Ask the same agent tomorrow and it starts over.
+
+**Kontinue fixes this.** It gives agents structured, queryable, session-spanning memory — so every session starts exactly where the last one ended, and switching agents mid-task loses nothing.
+
+Three things Kontinue changes:
+
+1. **Memory** — decisions, tasks, observations, plans, and handoffs are persisted in SQLite and human-readable markdown. The agent always knows what was done, why, and what comes next.
+2. **Proactiveness** — operating instructions embedded into agent context tell it when to create plans, log decisions, capture findings, and write handoffs — without being asked.
+3. **Seamless agent handoff** — any agent on any tool (Copilot, Claude, Cursor, Windsurf) calls `kontinue_read_context` and instantly recovers the full picture: open tasks, active plans, last handoff, recent decisions, pending questions. No re-briefing. No information loss.
 
 Works with **GitHub Copilot (VS Code)**, **Claude Code**, **Cursor**, and **Windsurf** via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io).
 
@@ -10,23 +18,29 @@ Works with **GitHub Copilot (VS Code)**, **Claude Code**, **Cursor**, and **Wind
 
 ## How It Works
 
-Kontinue runs as a local MCP server that your AI agent connects to. During a session, the agent:
+Kontinue runs as a local MCP server that your AI agent connects to. The agent is given operating instructions through `kontinue setup` — these tell it exactly when and how to use each tool, so the behavior is automatic, not prompted.
 
-1. Calls `kontinue_read_context` at the start → gets branch, last handoff, open tasks, active plans, and recent decisions
-2. Logs decisions, tasks, observations, checkpoints, and plans as it works
-3. Calls `kontinue_write_handoff` at the end → structured note for the next session
+**Every session follows the same contract:**
+
+1. **Start** → agent calls `kontinue_read_context` → recovers last handoff, open tasks, active plans, recent decisions, pending questions, and any developer signals
+2. **Work** → agent proactively logs decisions (with rationale), tasks (with outcomes), observations (bugs found, constraints discovered), and plan progress as it goes
+3. **End** → agent calls `kontinue_write_handoff` → writes a precise, actionable summary that any agent can act on immediately
+
+**Switch agents at any point.** A new agent — different tool, different model, next day — calls `kontinue_read_context` and resumes exactly where the previous one stopped. No re-briefing, no lost context.
 
 Everything is dual-written: SQLite (queryable, fast) + `.kontinue/*.md` files (human-readable, Obsidian-browsable, git-committable).
 
 ```
-~/.kontinue/kontinue.db        ← global DB, all projects keyed by path
+~/.kontinue/kontinue.db           ← global DB, all projects keyed by path
 <project>/.kontinue/
-  identity.md                  ← project metadata
-  tasks/todo.md                ← live task list
-  decisions/YYYY-MM-DD-*.md    ← one file per decision
-  sessions/YYYY-MM-DD-HH-MM.md ← session handoffs
-  notes/                       ← observations and free-form notes
+  identity.md                     ← project metadata
+  tasks/todo.md                   ← live task list
+  decisions/YYYY-MM-DD-*.md       ← one file per decision
+  sessions/YYYY-MM-DD-HH-MM.md   ← session handoffs
+  notes/                          ← observations and free-form notes
 ```
+
+
 
 ---
 
@@ -145,6 +159,31 @@ kontinue setup
 
 ---
 
+## Switching Agents Without Losing Context
+
+This is the core workflow Kontinue enables. Typical scenario:
+
+1. You start a session with **GitHub Copilot** in VS Code — it reads context, works for an hour, checkpoints progress
+2. You switch to **Claude Code** in the terminal — it calls `kontinue_read_context` and gets: last handoff, open tasks, active plans with step status, recent decisions with rationale, and any pending questions
+3. Claude picks up exactly where Copilot stopped — same task, same plan step, same understanding of why decisions were made
+4. Later you open **Cursor** — same story
+
+No copy-pasting context. No re-explaining. No lost progress. The handoff is always there.
+
+```bash
+# Agent 1 (Copilot) ends its session:
+# → calls kontinue_write_handoff("Finished auth middleware. Next: add refresh token endpoint.")
+
+# Agent 2 (Claude Code) starts next day:
+# → calls kontinue_read_context
+# → sees: task "Add refresh token", plan step "auth middleware" marked done,
+#         decision "JWT over sessions" with rationale,
+#         observation "cookie SameSite=Lax on staging"
+# → starts working immediately with full context
+```
+
+---
+
 ## MCP Tools (for AI Agents)
 
 The MCP server exposes 17 tools. Agents should call `kontinue_read_context` at the start of every session — the tool descriptions themselves contain the operating instructions.
@@ -245,4 +284,4 @@ Neither replaces the other.
 
 ## License
 
-EL-2.0
+[PolyForm Noncommercial 1.0.0](LICENSE) — free for personal and internal use; commercial use (selling, embedding in paid products, SaaS) is not permitted.

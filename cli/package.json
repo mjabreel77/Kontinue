@@ -25,7 +25,8 @@
   "files": [
     "/bin",
     "/dist",
-    "/oclif.manifest.json"
+    "/oclif.manifest.json",
+    "LICENSE"
   ],
   "keywords": [
     "ai",
@@ -34,7 +35,7 @@
     "developer-tools",
     "mcp"
   ],
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/mjabreel77/Kontinue.git"
