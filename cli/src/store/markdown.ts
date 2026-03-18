@@ -263,7 +263,7 @@ When the context window compresses, **you lose chat history but Kontinue persist
 ## Intent → Goals → Execution
 
 1. **Capture**: Understand user's real outcome. Persist as a task with acceptance criteria.
-2. **Decompose**: Break into executable steps. Research first if needed — don't ask if you should.
+2. **Decompose**: Break into executable steps. If the goal has 3+ steps or spans multiple phases, **create a plan immediately** with \`kontinue_update_plan\` — do not wait to be asked.
 3. **Execute**: Start the task, do the work, checkpoint after each step, log decisions and observations.
 4. **Report**: Mark task done with outcome. Tell user what was accomplished. Create follow-up tasks if needed.
 
@@ -283,7 +283,7 @@ When the context window compresses, **you lose chat history but Kontinue persist
 | \`kontinue_flag_blocker\` | Cannot proceed without external input |
 | \`kontinue_ask_question\` / \`answer_question\` | Uncertainty that doesn't block but needs resolution |
 | \`kontinue_search_memory\` | Before modifying unfamiliar code. Pass a keyword to search. |
-| \`kontinue_update_plan\` | Multi-step work spanning multiple tasks. Plans surface in brief context. |
+| \`kontinue_update_plan\` | **Required** whenever the goal has 3+ steps or multiple phases — create the plan before starting tasks, without waiting to be asked |
 | \`kontinue_write_handoff\` | Session end. What was done, what wasn't, what's next. |
 
 ---
@@ -297,6 +297,8 @@ When the context window compresses, **you lose chat history but Kontinue persist
 - **Bare tasks/decisions**: Missing descriptions, outcomes, rationale, or file references
 - **Batching persistence**: Waiting until the end to log. Persist as you go.
 - **Context pollution**: Never resolving observations or superseding outdated decisions. Clean up as you go.
+- **Skipping plans for multi-step work**: Starting tasks directly without a plan when the goal has 3+ steps or multiple phases. Create the plan first — do not wait to be told.
+- **Skipping plans for multi-step work**: Starting tasks directly without a plan when the goal has 3+ steps or multiple phases. Create the plan first — do not wait to be told.
 `
 }
 
@@ -323,6 +325,7 @@ If there are in-progress tasks, **resume them**. If there are open questions, ad
 When the user gives you a goal:
 - Understand their **real outcome** (not just the literal words)
 - Persist it as a task with \`kontinue_update_task\` action \`add\` — include acceptance criteria in the description
+- If the goal has 3+ steps or multiple phases, **create a plan first** with \`kontinue_update_plan\` before starting any task
 - \`start\` it before beginning work
 
 ## 3. Execute Autonomously
