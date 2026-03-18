@@ -4,7 +4,7 @@
   "description": "Persistent memory and execution-tracing layer for AI coding agents",
   "type": "module",
   "bin": {
-    "kontinue": "./bin/run.js"
+    "kontinue": "bin/run.js"
   },
   "scripts": {
     "build": "tsc",
@@ -37,7 +37,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mjabreel77/Kontinue.git"
+    "url": "git+https://github.com/mjabreel77/Kontinue.git"
   },
   "homepage": "https://github.com/mjabreel77/Kontinue#readme",
   "dependencies": {
@@ -55,6 +55,8 @@
     "typescript": "^5.9.3"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
