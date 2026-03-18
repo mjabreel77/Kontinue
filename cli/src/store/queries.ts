@@ -193,6 +193,41 @@ export function archiveDecision(decisionId: number): void {
   ).run(decisionId)
 }
 
+/** Returns decisions created on or after the given ISO timestamp. */
+export function getDecisionsSince(projectId: number, since: string): Decision[] {
+  return getDb().prepare(
+    "SELECT * FROM decisions WHERE project_id = ? AND created_at >= ? ORDER BY created_at DESC"
+  ).all(projectId, since) as unknown as Decision[]
+}
+
+/** Returns completed sessions (with handoff notes) ended on or after the given ISO timestamp. */
+export function getSessionsSince(projectId: number, since: string): Session[] {
+  return getDb().prepare(
+    "SELECT * FROM sessions WHERE project_id = ? AND ended_at IS NOT NULL AND ended_at >= ? ORDER BY ended_at DESC"
+  ).all(projectId, since) as unknown as Session[]
+}
+
+/** Returns tasks completed (status='done') with updated_at on or after the given ISO timestamp. */
+export function getTasksDoneSince(projectId: number, since: string): Task[] {
+  return getDb().prepare(
+    "SELECT * FROM tasks WHERE project_id = ? AND status = 'done' AND updated_at >= ? ORDER BY updated_at DESC"
+  ).all(projectId, since) as unknown as Task[]
+}
+
+/** Returns unresolved notes/observations created on or after the given ISO timestamp. */
+export function getObservationsSince(projectId: number, since: string): Note[] {
+  return getDb().prepare(
+    'SELECT * FROM notes WHERE project_id = ? AND resolved_at IS NULL AND created_at >= ? ORDER BY created_at DESC'
+  ).all(projectId, since) as unknown as Note[]
+}
+
+/** Returns all questions (open or resolved) created on or after the given ISO timestamp. */
+export function getQuestionsSince(projectId: number, since: string): Question[] {
+  return getDb().prepare(
+    'SELECT * FROM questions WHERE project_id = ? AND created_at >= ? ORDER BY created_at ASC'
+  ).all(projectId, since) as unknown as Question[]
+}
+
 // -- Notes -------------------------------------------------------------------
 
 export function addNote(projectId: number, content: string, sessionId?: number, taskId?: number | null): Note {
