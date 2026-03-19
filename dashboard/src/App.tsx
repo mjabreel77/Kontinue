@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { HashRouter, Routes, Route } from 'react-router-dom'
 import { ThemeProvider } from '@/components/theme-provider'
 import { Layout } from '@/components/layout'
 import { useApiData } from '@/lib/api'
@@ -82,9 +82,9 @@ function LoadingState({ error }: { error: string | null }) {
 export function App() {
   return (
     <ThemeProvider defaultTheme="system">
-      <BrowserRouter>
+      <HashRouter>
         <ConnectedLayout />
-      </BrowserRouter>
+      </HashRouter>
     </ThemeProvider>
   )
 }

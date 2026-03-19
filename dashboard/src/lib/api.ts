@@ -27,6 +27,9 @@ export function useApiData() {
 
     es.addEventListener('full', handleEvent)
     es.addEventListener('update', handleEvent)
+    // Fallback: also handle unnamed messages (some EventSource implementations
+    // in Electron may deliver named events via onmessage instead)
+    es.onmessage = handleEvent
 
     es.onerror = () => {
       setConnected(false)
@@ -41,6 +44,7 @@ export function useApiData() {
     return () => {
       es.removeEventListener('full', handleEvent)
       es.removeEventListener('update', handleEvent)
+      es.onmessage = null
       es.close()
       esRef.current = null
     }
@@ -51,7 +55,7 @@ export function useApiData() {
 
 export async function sendSignal(type: string, content: string): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE}/api/signal`, {
+    const res = await fetch(`${API_BASE}/api/signals`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type, content, source: 'web' }),
@@ -64,7 +68,7 @@ export async function sendSignal(type: string, content: string): Promise<boolean
 
 export async function acknowledgeSignal(id: number): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE}/api/signal/${id}/ack`, { method: 'POST' })
+    const res = await fetch(`${API_BASE}/api/signals/${id}/acknowledge`, { method: 'POST' })
     return res.ok
   } catch {
     return false
@@ -73,10 +77,25 @@ export async function acknowledgeSignal(id: number): Promise<boolean> {
 
 export async function addTask(title: string, description: string): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE}/api/task`, {
+    const res = await fetch(`${API_BASE}/api/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, description }),
+    })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+export async function updateTaskStatus(
+  taskId: number, status: string, note?: string
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/api/tasks/${taskId}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status, note }),
     })
     return res.ok
   } catch {
@@ -97,6 +116,6 @@ export async function fetchSignalHistory(params: {
   if (params.source) sp.set('source', params.source)
   if (params.page) sp.set('page', String(params.page))
   if (params.limit) sp.set('limit', String(params.limit))
-  const res = await fetch(`${API_BASE}/api/signals?${sp.toString()}`)
+  const res = await fetch(`${API_BASE}/api/signals/history?${sp.toString()}`)
   return res.json()
 }

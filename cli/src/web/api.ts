@@ -31,6 +31,7 @@ import {
   getDecisionChains,
   getReplaySessions,
   getExternalLinksForProject,
+  updateTaskStatus,
 } from '../store/queries.js'
 import { getBranch, getCommit } from '../utils/git.js'
 import { getDb } from '../store/db.js'
@@ -412,11 +413,41 @@ export function handleApi(
     return true
   }
 
-  // CORS preflight for POST endpoints
+  // PATCH /api/tasks/:id/status — update task status from the dashboard
+  const taskStatusMatch = url?.match(/^\/api\/tasks\/(\d+)\/status$/)
+  if (taskStatusMatch && req.method === 'PATCH') {
+    parseJsonBody(req).then(body => {
+      const taskId = parseInt(taskStatusMatch[1], 10)
+      const status = String(body.status ?? '').trim()
+      const validStatuses = ['todo', 'in-progress', 'done', 'abandoned']
+      if (!validStatuses.includes(status)) {
+        jsonResponse(res, 400, { error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` })
+        return
+      }
+      updateTaskStatus(taskId, status as 'todo' | 'in-progress' | 'done' | 'abandoned')
+      // Optionally send a signal with a note about the status change
+      const note = body.note ? String(body.note).trim() : null
+      if (note) {
+        addSignal(project.id, note, 'message', 'web', JSON.stringify({ task_id: taskId, action: 'status_change', new_status: status }))
+      }
+      // Rewrite task list markdown
+      const open = getAllOpenTasks(project.id)
+      rewriteTaskList(
+        cwd,
+        open.filter(t => t.status === 'in-progress'),
+        open.filter(t => t.status === 'todo'),
+        getTasksByStatus(project.id, 'done')
+      )
+      jsonResponse(res, 200, { ok: true, task_id: taskId, status })
+    }).catch(err => { jsonResponse(res, 400, { error: String(err) }) })
+    return true
+  }
+
+  // CORS preflight for POST/PATCH endpoints
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
     })
     res.end()

@@ -9,6 +9,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { Badge } from '@/components/ui/badge'
 import { useTheme } from '@/components/theme-provider'
 import { NotificationPanel } from '@/components/notification-panel'
+import { SignalWidget } from '@/components/signal-widget'
 import {
   Sidebar,
   SidebarContent,
@@ -245,6 +246,7 @@ export function Layout({ data, connected }: LayoutProps) {
 
         <main className="flex-1 overflow-auto">
           <Outlet />
+          <SignalWidget data={data} />
         </main>
       </SidebarProvider>
     </TooltipProvider>
