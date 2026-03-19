@@ -339,6 +339,10 @@ export function findTaskItemByContent(taskId: number, content: string): TaskItem
   return items.find(i => i.content.toLowerCase().includes(lower))
 }
 
+export function deleteTaskItem(itemId: number): void {
+  getDb().prepare('DELETE FROM task_items WHERE id = ?').run(itemId)
+}
+
 // -- Memory chunks ------------------------------------------------------------
 
 export function upsertChunk(
@@ -358,10 +362,29 @@ export function upsertChunk(
   `).run(projectId, sourceType, sourceId, content)
 }
 
-export function getAllChunks(projectId: number): Array<{ id: number; content: string; source_type: string; source_id: number }> {
+export function getAllChunks(projectId: number): Array<{ id: number; content: string; source_type: string; source_id: number; created_at?: string; decay_exempt?: number }> {
   return getDb().prepare(
-    'SELECT id, content, source_type, source_id FROM memory_chunks WHERE project_id = ? ORDER BY created_at DESC'
-  ).all(projectId) as unknown as Array<{ id: number; content: string; source_type: string; source_id: number }>
+    'SELECT id, content, source_type, source_id, created_at, decay_exempt FROM memory_chunks WHERE project_id = ? ORDER BY created_at DESC'
+  ).all(projectId) as unknown as Array<{ id: number; content: string; source_type: string; source_id: number; created_at?: string; decay_exempt?: number }>
+}
+
+/** Default stale threshold in days — chunks older than this are flagged. */
+export const STALE_AFTER_DAYS = 30
+
+/** Count non-exempt chunks older than the stale threshold. */
+export function getStaleChunkCount(projectId: number, days = STALE_AFTER_DAYS): number {
+  const cutoff = new Date(Date.now() - days * 86_400_000).toISOString()
+  const row = getDb().prepare(
+    'SELECT COUNT(*) as n FROM memory_chunks WHERE project_id = ? AND created_at < ? AND decay_exempt = 0'
+  ).get(projectId, cutoff) as { n: number }
+  return row.n
+}
+
+/** Mark a chunk as exempt from decay (e.g. architecture decisions, identity). */
+export function setChunkDecayExempt(projectId: number, sourceType: string, sourceId: number, exempt: boolean): void {
+  getDb().prepare(
+    'UPDATE memory_chunks SET decay_exempt = ? WHERE project_id = ? AND source_type = ? AND source_id = ?'
+  ).run(exempt ? 1 : 0, projectId, sourceType, sourceId)
 }
 
 export function getChunkCount(projectId: number): number {
@@ -371,21 +394,89 @@ export function getChunkCount(projectId: number): number {
   return row.n
 }
 
-/** Search memory chunks by keyword at the DB level (LIKE %keyword%). */
+/** Get non-exempt chunks created during a session's lifetime for compression. */
+export function getSessionChunksForCompression(
+  projectId: number,
+  sessionStartedAt: string,
+): Array<{ id: number; content: string; source_type: string; source_id: number; created_at: string }> {
+  return getDb().prepare(`
+    SELECT id, content, source_type, source_id, created_at
+    FROM memory_chunks
+    WHERE project_id = ? AND created_at >= ? AND decay_exempt = 0
+    ORDER BY source_type, created_at ASC
+  `).all(projectId, sessionStartedAt) as unknown as Array<{ id: number; content: string; source_type: string; source_id: number; created_at: string }>
+}
+
+/** Delete specific chunks by id (used during compression). */
+export function deleteChunksByIds(ids: number[]): void {
+  if (ids.length === 0) return
+  const placeholders = ids.map(() => '?').join(',')
+  getDb().prepare(`DELETE FROM memory_chunks WHERE id IN (${placeholders})`).run(...ids)
+}
+
+/** Check if FTS5 virtual table exists (cached per process). */
+let _ftsAvailable: boolean | null = null
+function ftsAvailable(): boolean {
+  if (_ftsAvailable !== null) return _ftsAvailable
+  try {
+    const row = getDb().prepare(
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_chunks_fts'"
+    ).get()
+    _ftsAvailable = !!row
+  } catch {
+    _ftsAvailable = false
+  }
+  return _ftsAvailable
+}
+
+/** Search memory chunks using FTS5 ranked search (BM25), with LIKE fallback. */
 export function searchChunks(
   projectId: number,
   keyword: string,
   sourceType?: string,
   limit = 20
-): Array<{ id: number; content: string; source_type: string; source_id: number }> {
+): Array<{ id: number; content: string; source_type: string; source_id: number; created_at?: string }> {
+  const terms = keyword.split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return []
+
+  // Try FTS5 ranked search first
+  if (ftsAvailable()) {
+    try {
+      // Quote each word as a literal FTS5 term, join with OR
+      const ftsQuery = terms.map(t => `"${t.replace(/"/g, '""')}"`).join(' OR ')
+
+      if (sourceType) {
+        return getDb().prepare(`
+          SELECT mc.id, mc.content, mc.source_type, mc.source_id, mc.created_at
+          FROM memory_chunks_fts fts
+          JOIN memory_chunks mc ON mc.id = fts.rowid
+          WHERE fts.content MATCH ? AND mc.project_id = ? AND mc.source_type = ?
+          ORDER BY fts.rank
+          LIMIT ?
+        `).all(ftsQuery, projectId, sourceType, limit) as unknown as Array<{ id: number; content: string; source_type: string; source_id: number; created_at?: string }>
+      }
+      return getDb().prepare(`
+        SELECT mc.id, mc.content, mc.source_type, mc.source_id, mc.created_at
+        FROM memory_chunks_fts fts
+        JOIN memory_chunks mc ON mc.id = fts.rowid
+        WHERE fts.content MATCH ? AND mc.project_id = ?
+        ORDER BY fts.rank
+        LIMIT ?
+      `).all(ftsQuery, projectId, limit) as unknown as Array<{ id: number; content: string; source_type: string; source_id: number; created_at?: string }>
+    } catch {
+      // FTS query failed — fall through to LIKE
+    }
+  }
+
+  // Fallback: LIKE substring match
   if (sourceType) {
     return getDb().prepare(
-      'SELECT id, content, source_type, source_id FROM memory_chunks WHERE project_id = ? AND source_type = ? AND content LIKE ? ORDER BY created_at DESC LIMIT ?'
-    ).all(projectId, sourceType, `%${keyword}%`, limit) as unknown as Array<{ id: number; content: string; source_type: string; source_id: number }>
+      'SELECT id, content, source_type, source_id, created_at FROM memory_chunks WHERE project_id = ? AND source_type = ? AND content LIKE ? ORDER BY created_at DESC LIMIT ?'
+    ).all(projectId, sourceType, `%${keyword}%`, limit) as unknown as Array<{ id: number; content: string; source_type: string; source_id: number; created_at?: string }>
   }
   return getDb().prepare(
-    'SELECT id, content, source_type, source_id FROM memory_chunks WHERE project_id = ? AND content LIKE ? ORDER BY created_at DESC LIMIT ?'
-  ).all(projectId, `%${keyword}%`, limit) as unknown as Array<{ id: number; content: string; source_type: string; source_id: number }>
+    'SELECT id, content, source_type, source_id, created_at FROM memory_chunks WHERE project_id = ? AND content LIKE ? ORDER BY created_at DESC LIMIT ?'
+  ).all(projectId, `%${keyword}%`, limit) as unknown as Array<{ id: number; content: string; source_type: string; source_id: number; created_at?: string }>
 }
 
 /** Delete memory chunk by source. Used when archiving/superseding decisions. */

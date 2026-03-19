@@ -216,6 +216,9 @@ function migrate(db: DatabaseSync): void {
   // Decision scope: 'project' (permanent) vs 'task' (auto-archived when task completes).
   addColumnIfMissing('decisions', 'scope', "TEXT NOT NULL DEFAULT 'project'")
 
+  // Memory confidence decay: exempt certain chunks from stale flagging.
+  addColumnIfMissing('memory_chunks', 'decay_exempt', 'INTEGER NOT NULL DEFAULT 0')
+
   // Add UNIQUE constraint to memory_chunks for proper upsert deduplication.
   // SQLite doesn't support ADD CONSTRAINT, so we create a unique index instead.
   // First, remove any duplicate rows keeping only the most recent one per (project_id, source_type, source_id).
@@ -228,4 +231,28 @@ function migrate(db: DatabaseSync): void {
     )
   `)
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_chunks_unique ON memory_chunks(project_id, source_type, source_id)`)
+
+  // ── FTS5 full-text search index ──────────────────────────────────────────
+  // Ranked search (BM25) for memory_chunks. Falls back to LIKE if FTS5 unavailable.
+  try {
+    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memory_chunks_fts USING fts5(content, content='memory_chunks', content_rowid='id')`)
+
+    db.exec(`CREATE TRIGGER IF NOT EXISTS mc_fts_insert AFTER INSERT ON memory_chunks BEGIN
+      INSERT INTO memory_chunks_fts(rowid, content) VALUES (new.id, new.content);
+    END`)
+
+    db.exec(`CREATE TRIGGER IF NOT EXISTS mc_fts_delete AFTER DELETE ON memory_chunks BEGIN
+      INSERT INTO memory_chunks_fts(memory_chunks_fts, rowid, content) VALUES('delete', old.id, old.content);
+    END`)
+
+    db.exec(`CREATE TRIGGER IF NOT EXISTS mc_fts_update AFTER UPDATE ON memory_chunks BEGIN
+      INSERT INTO memory_chunks_fts(memory_chunks_fts, rowid, content) VALUES('delete', old.id, old.content);
+      INSERT INTO memory_chunks_fts(rowid, content) VALUES (new.id, new.content);
+    END`)
+
+    // Rebuild to index any pre-existing rows.
+    db.exec(`INSERT INTO memory_chunks_fts(memory_chunks_fts) VALUES('rebuild')`)
+  } catch {
+    // FTS5 not compiled in — searchChunks will fall back to LIKE
+  }
 }

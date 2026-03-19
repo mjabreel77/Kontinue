@@ -27,6 +27,7 @@ import {
   getTaskItems,
   checkTaskItem,
   findTaskItemByContent,
+  deleteTaskItem,
   startSession,
   getDecisionsByTask,
   getNotesByTask,
@@ -62,9 +63,15 @@ import {
   incrementToolCalls,
   getSessionToolCalls,
   getOpenObservations,
+  getStaleChunkCount,
+  setChunkDecayExempt,
+  STALE_AFTER_DAYS,
+  getSessionChunksForCompression,
+  deleteChunksByIds,
 } from '../store/queries.js'
 import { writeDecision, writeNote, writeSession, rewriteTaskList, writePlan, deletePlanFile, SUBAGENT_INSTRUCTIONS } from '../store/markdown.js'
 import { getBranch, getCommit, getRecentLog, getDiffFiles } from '../utils/git.js'
+import { shareDecision, searchGlobalPatterns, getAllGlobalPatterns } from '../store/global-db.js'
 
 function getProject(cwd: string) {
   const project = findProjectByPath(cwd)
@@ -109,6 +116,8 @@ export async function startMcpServer(cwd: string): Promise<void> {
       ? Math.round((Date.now() - new Date(session.started_at).getTime()) / 60_000)
       : 0
 
+    const staleMemory = getStaleChunkCount(projectId)
+
     const parts = [
       `${ip} active · ${todo} todo`,
       `checkpoint: ${cpAge}`,
@@ -116,6 +125,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
       stale.length > 0 ? `${stale.length} stale` : '',
       qs.length > 0 ? `${qs.length} question${qs.length > 1 ? 's' : ''} open` : '',
       sigs.length > 0 ? `${sigs.length} signal${sigs.length > 1 ? 's' : ''} pending` : '',
+      staleMemory > 0 ? `${staleMemory} stale memory` : '',
     ].filter(Boolean)
 
     const healthDetail = health.level !== 'good' ? `\n> _Health: ${health.reasons.join(', ')}_` : ''
@@ -383,29 +393,32 @@ export async function startMcpServer(cwd: string): Promise<void> {
     'update_task',
     {
       description: [
-        'Create, start, complete, or abandon tasks. Call this whenever you begin or finish a unit of work.',
+        'Create, start, complete, or abandon tasks. Manage task checklist items. Call this whenever you begin or finish a unit of work.',
         '',
-        'Actions:',
-        '- "add"     — Create a new task before starting a unit of work.',
-        '             Title: short imperative ("Add rate limiting to /api/auth").',
-        '             Description: what done looks like — acceptance criteria, scope, any known constraints.',
-        '             Include description ALWAYS — it makes handoffs self-contained.',
-        '- "start"   — Mark a task in-progress when you begin actively working on it.',
-        '- "done"    — Mark a task completed immediately after finishing it.',
-        '             Outcome: describe what was done, what files were changed, what approach was taken.',
+        'Task actions:',
+        '- "add"     — Create a new task. Title: short imperative. Description: acceptance criteria. Include description ALWAYS.',
+        '- "start"   — Mark a task in-progress.',
+        '- "done"    — Mark a task completed. Provide outcome describing what was done.',
         '- "abandon" — Mark a task dropped. Always pair with log_decision to record why.',
-        '- "item_done" — Mark a checklist item as done. Title matches the task, item matches the checklist item (fuzzy).',
         '',
-        'Title matching for start/done/abandon/item_done is fuzzy — a partial match is sufficient.',
-        'Dual-writes: updates the SQLite tasks table AND rewrites .kontinue/tasks/todo.md in-place.',
+        'Item actions (manage checklist items on a task):',
+        '- "item_add"    — Add new checklist items to an existing task. Pass items as comma-separated list.',
+        '- "item_done"   — Mark a checklist item as done. Fuzzy matches item content.',
+        '- "item_undo"   — Uncheck a previously completed item.',
+        '- "item_remove" — Remove a checklist item entirely.',
         '',
-        'Protocol: Before action="start", ensure read_context was called this session. After action="done", a checkpoint is automatically created — proceed directly to check_signals before starting the next task.',
+        'Title matching for all actions except "add" is fuzzy — a partial match is sufficient.',
+        'For item actions, use the "items" parameter for the item content (fuzzy match for done/undo/remove, comma-separated for item_add).',
+        '',
+        'Dual-writes: updates SQLite tasks table AND rewrites .kontinue/tasks/todo.md in-place.',
+        '',
+        'Protocol: Before "start", ensure read_context was called. After "done", a checkpoint is auto-created — proceed to check_signals.',
       ].join('\n'),
       inputSchema: {
-        action:      z.enum(['add', 'start', 'done', 'abandon', 'item_done']).describe('"add" creates; "start" marks in-progress; "done" marks complete; "abandon" marks dropped; "item_done" marks a checklist item complete'),
+        action:      z.enum(['add', 'start', 'done', 'abandon', 'item_add', 'item_done', 'item_undo', 'item_remove']).describe('Task lifecycle or item management action'),
         title:       z.string().describe('Full task title for "add", or a partial match string for other actions'),
         description: z.string().optional().describe('For "add": what needs to be done and what done looks like (acceptance criteria). Be specific.'),
-        items:       z.string().optional().describe('For "add": comma-separated checklist steps. For "item_done": partial match of the item content to mark done.'),
+        items:       z.string().optional().describe('For "add"/"item_add": comma-separated checklist items. For "item_done"/"item_undo"/"item_remove": partial match of the item content.'),
         outcome:     z.string().optional().describe('For "done": what was actually done, what approach was taken, which files were changed.'),
       },
     },
@@ -414,16 +427,35 @@ export async function startMcpServer(cwd: string): Promise<void> {
       trackToolCall(project.id)
       const session = getActiveSession(project.id)
 
-      if (action === 'item_done') {
+      if (action === 'item_done' || action === 'item_undo' || action === 'item_remove') {
         const task = findTaskByTitle(project.id, title)
         if (!task) return { content: [{ type: 'text' as const, text: `No open task found matching: "${title}"` }] }
-        if (!items) return { content: [{ type: 'text' as const, text: `Provide the item content to mark done via the "items" parameter.` }] }
+        if (!items) return { content: [{ type: 'text' as const, text: `Provide the item content via the "items" parameter.` }] }
         const item = findTaskItemByContent(task.id, items)
         if (!item) return { content: [{ type: 'text' as const, text: `No checklist item found matching: "${items}" on task "${task.title}"` }] }
-        checkTaskItem(item.id, true)
+
+        if (action === 'item_done') {
+          checkTaskItem(item.id, true)
+        } else if (action === 'item_undo') {
+          checkTaskItem(item.id, false)
+        } else {
+          deleteTaskItem(item.id)
+        }
+
         const allItems = getTaskItems(task.id)
         const doneCount = allItems.filter(i => i.done).length
-        return { content: [{ type: 'text' as const, text: `Item #${item.id} "${item.content}" ✓ [${doneCount}/${allItems.length}] on #${task.id} "${task.title}"${signalCheck(project.id)}${statusLine(project.id)}` }] }
+        const verb = action === 'item_done' ? '✓' : action === 'item_undo' ? '↩ unchecked' : '✕ removed'
+        return { content: [{ type: 'text' as const, text: `Item #${item.id} "${item.content}" ${verb} [${doneCount}/${allItems.length}] on #${task.id} "${task.title}"${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      }
+
+      if (action === 'item_add') {
+        const task = findTaskByTitle(project.id, title)
+        if (!task) return { content: [{ type: 'text' as const, text: `No open task found matching: "${title}"` }] }
+        if (!items) return { content: [{ type: 'text' as const, text: `Provide comma-separated items to add via the "items" parameter.` }] }
+        const newItems = addTaskItems(task.id, items.split(',').map(s => s.trim()).filter(Boolean))
+        const allItems = getTaskItems(task.id)
+        const doneCount = allItems.filter(i => i.done).length
+        return { content: [{ type: 'text' as const, text: `Added ${newItems.length} item${newItems.length > 1 ? 's' : ''} to #${task.id} "${task.title}" [${doneCount}/${allItems.length}]${signalCheck(project.id)}${statusLine(project.id)}` }] }
       }
 
       let resolvedTask: { id: number; title: string }
@@ -519,9 +551,10 @@ export async function startMcpServer(cwd: string): Promise<void> {
         tags:         z.string().optional().describe('Comma-separated category tags, e.g. "architecture,security,performance,dependency"'),
         task_title:   z.string().optional().describe('Partial title of the task this decision belongs to — links it to a board item'),
         scope:        z.enum(['project', 'task']).optional().default('project').describe('"project" = permanent, survives across sessions. "task" = auto-archived when linked task completes.'),
+        share:        z.boolean().optional().default(false).describe('Set true to share this decision to the global cross-project memory. Other projects can discover it via search_memory with global=true.'),
       },
     },
-    async ({ summary, rationale, alternatives, context, files, tags, task_title, scope }) => {
+    async ({ summary, rationale, alternatives, context, files, tags, task_title, scope, share }) => {
       const project = getProject(cwd)
       trackToolCall(project.id)
       const session = getActiveSession(project.id)
@@ -540,6 +573,16 @@ export async function startMcpServer(cwd: string): Promise<void> {
       ].filter(Boolean).join('\n')
       upsertChunk(project.id, 'decision', decision.id, chunkContent)
 
+      // Project-scoped decisions are exempt from decay — they represent permanent knowledge
+      if (scope === 'project') {
+        setChunkDecayExempt(project.id, 'decision', decision.id, true)
+      }
+
+      // Share to global cross-project memory if requested
+      if (share) {
+        shareDecision(project.name, cwd, summary, rationale, alternatives, tags, files)
+      }
+
       const warn = contextWarning(project.id)
       const rationaleWarn = !rationale
         ? '\n\n> **REMINDER:** No `rationale` provided. Future agents cannot understand *why* this was decided. Call `log_decision` again with the same `summary` plus a `rationale` to fill it in.'
@@ -547,8 +590,9 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const scopeNote = scope === 'task'
         ? ' _(task-scoped — will auto-archive when task completes)_'
         : ''
+      const shareNote = share ? ' _(shared globally)_' : ''
 
-      return { content: [{ type: 'text' as const, text: `Decision recorded${scopeNote}: "${summary}" → .kontinue/decisions/${warn}${rationaleWarn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Decision recorded${scopeNote}${shareNote}: "${summary}" → .kontinue/decisions/${warn}${rationaleWarn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
@@ -617,6 +661,29 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const updated = { ...session, ended_at: new Date().toISOString(), handoff_note: fullSummary, blockers: blockers ?? null, end_commit: endCommit }
       writeSession(cwd, updated)
       upsertChunk(project.id, 'session', session.id, fullSummary)
+
+      // ── Context compression: consolidate session's granular chunks into a digest ──
+      const sessionChunks = getSessionChunksForCompression(project.id, session.started_at)
+      if (sessionChunks.length > 3) {
+        // Group by source_type and create a digest
+        const grouped: Record<string, string[]> = {}
+        for (const c of sessionChunks) {
+          if (!grouped[c.source_type]) grouped[c.source_type] = []
+          grouped[c.source_type].push(c.content.slice(0, 200))
+        }
+        const digestLines = Object.entries(grouped).map(
+          ([type, contents]) => `**${type}** (${contents.length}):\n${contents.map(c => `- ${c}`).join('\n')}`
+        )
+        const digest = `Session digest (${session.started_at.slice(0, 10)}):\n${digestLines.join('\n\n')}`
+
+        // Store the digest as a single session chunk (exempt from decay)
+        upsertChunk(project.id, 'session', session.id, `${fullSummary}\n\n---\n\n${digest}`)
+        setChunkDecayExempt(project.id, 'session', session.id, true)
+
+        // Remove the individual granular chunks that were consolidated
+        const idsToRemove = sessionChunks.map(c => c.id)
+        deleteChunksByIds(idsToRemove)
+      }
 
       const thinWarn = summary.trim().length < 80
         ? '\n\n> **WARNING:** This handoff summary is very short. Name the specific files changed, functions added/fixed, and the exact next action. A vague handoff means the next agent starts blind.'
@@ -720,9 +787,10 @@ export async function startMcpServer(cwd: string): Promise<void> {
         keyword: z.string().optional().describe('Search keyword — matches against memory chunk content. If omitted, returns most recent chunks.'),
         limit: z.number().optional().default(20).describe('Maximum memory chunks to return (default 20)'),
         type:  z.enum(['task','decision','note','session','architecture','identity']).optional().describe('Filter to a specific chunk type'),
+        global: z.boolean().optional().default(false).describe('Set true to also search the global cross-project memory. Returns shared decisions from other projects alongside local results.'),
       },
     },
-    async ({ keyword, limit, type }) => {
+    async ({ keyword, limit, type, global: searchGlobal }) => {
       const project = getProject(cwd)
       trackToolCall(project.id)
       const chunks = keyword
@@ -735,15 +803,32 @@ export async function startMcpServer(cwd: string): Promise<void> {
 
       const warn = contextWarning(project.id)
 
-      if (chunks.length === 0) {
+      if (chunks.length === 0 && !searchGlobal) {
         return { content: [{ type: 'text' as const, text: `No memory indexed yet. Start a session and log some decisions.${warn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
       }
 
+      const staleThresholdMs = STALE_AFTER_DAYS * 86_400_000
+
       const text = chunks
-        .map(c => `### [${c.source_type}]\n${c.content}`)
+        .map(c => {
+          const age = c.created_at ? Date.now() - new Date(c.created_at).getTime() : 0
+          const staleTag = (age > staleThresholdMs && !(c as { decay_exempt?: number }).decay_exempt) ? ' ⚠️ STALE' : ''
+          return `### [${c.source_type}${staleTag}]\n${c.content}`
+        })
         .join('\n\n---\n\n')
 
-      return { content: [{ type: 'text' as const, text: `${text}${warn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      // Append cross-project results if global search requested
+      let globalSection = ''
+      if (searchGlobal && keyword) {
+        const globalPatterns = searchGlobalPatterns(keyword, limit)
+        if (globalPatterns.length > 0) {
+          globalSection = '\n\n---\n\n## 🌐 Cross-Project Patterns\n\n' + globalPatterns
+            .map(p => `### [${p.project_name}]\n${p.summary}${p.rationale ? `\nRationale: ${p.rationale}` : ''}${p.alternatives ? `\nAlternatives: ${p.alternatives}` : ''}`)
+            .join('\n\n---\n\n')
+        }
+      }
+
+      return { content: [{ type: 'text' as const, text: `${text}${globalSection}${warn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
@@ -906,9 +991,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
     async ({ keyword }) => {
       const project = getProject(cwd)
       trackToolCall(project.id)
-      const chunks = getAllChunks(project.id)
-      const k = keyword.toLowerCase()
-      const matches = chunks.filter(c => c.content.toLowerCase().includes(k)).slice(0, 3)
+      const matches = searchChunks(project.id, keyword, undefined, 3)
       const warn = contextWarning(project.id)
       const text = matches.length
         ? matches.map(c => `[${c.source_type}]\n${c.content}`).join('\n\n---\n\n')
@@ -1078,6 +1161,9 @@ export async function startMcpServer(cwd: string): Promise<void> {
         tags         && `Tags: ${tags}`,
       ].filter(Boolean).join('\n')
       upsertChunk(project.id, 'decision', newDecision.id, chunkContent)
+
+      // Superseding decisions inherit project scope — exempt from decay
+      setChunkDecayExempt(project.id, 'decision', newDecision.id, true)
 
       return { content: [{ type: 'text' as const, text: `Decision superseded ✓\nOld: "${old.summary}" → archived\nNew: "${summary}"${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
