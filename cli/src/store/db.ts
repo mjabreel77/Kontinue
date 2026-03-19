@@ -203,6 +203,7 @@ function migrate(db: DatabaseSync): void {
   addColumnIfMissing('decisions', 'task_id',    'INTEGER')
   addColumnIfMissing('notes',     'task_id',    'INTEGER')
   addColumnIfMissing('sessions',  'files_touched', 'TEXT')
+  addColumnIfMissing('sessions',  'tool_calls', 'INTEGER DEFAULT 0')
   addColumnIfMissing('decisions', 'confidence', "TEXT NOT NULL DEFAULT 'confirmed'")
 
   // Decision lifecycle: active → superseded/archived. Prevents dead decisions from polluting context.
@@ -211,6 +212,9 @@ function migrate(db: DatabaseSync): void {
 
   // Observation/note lifecycle: resolved_at marks an observation as addressed/no longer relevant.
   addColumnIfMissing('notes', 'resolved_at', 'TEXT')
+
+  // Decision scope: 'project' (permanent) vs 'task' (auto-archived when task completes).
+  addColumnIfMissing('decisions', 'scope', "TEXT NOT NULL DEFAULT 'project'")
 
   // Add UNIQUE constraint to memory_chunks for proper upsert deduplication.
   // SQLite doesn't support ADD CONSTRAINT, so we create a unique index instead.

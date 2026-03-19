@@ -170,6 +170,7 @@ export function getDashboardHtml(projectName: string): string {
     margin-bottom: 8px;
   }
   .task-card:last-child { margin-bottom: 0; }
+  .task-card.stale { border-color: var(--red); border-left: 3px solid var(--red); }
 
   .task-title { font-weight: 500; font-size: 13px; margin-bottom: 4px; }
   .task-desc  { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
@@ -407,6 +408,7 @@ export function getDashboardHtml(projectName: string): string {
     <span id="git-info" class="badge">-</span>
     <span id="session-badge" class="badge">-</span>
     <span id="cp-badge" class="badge">-</span>
+    <span id="health-badge" class="badge">-</span>
     <span id="signal-badge" class="badge" style="display:none">-</span>
   </div>
   <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark mode">
@@ -756,10 +758,12 @@ async function submitAnswer(id) {
 
 // ── Render functions ─────────────────────────────────────────────────────────
 
-function renderTask(t) {
+function renderTask(t, staleIds) {
   const desc = t.description ? \`<div class="task-desc">\${esc(t.description.slice(0,100))}\${t.description.length > 100 ? '...' : ''}</div>\` : ''
   const branch = t.branch && t.branch !== 'HEAD' ? \`<span style="color:var(--green)">&#x1f33f; \${esc(t.branch)}</span>\` : ''
   const age = \`<span>\${fmtAge(t.updated_at)}</span>\`
+  const isStale = staleIds && staleIds.has(t.id)
+  const staleTag = isStale ? \` <span class="tag red">stale</span>\` : ''
 
   let itemsHtml = ''
   const items = t.items || []
@@ -769,6 +773,7 @@ function renderTask(t) {
     const visibleItems = items.slice(0, 4).map(i =>
       \`<div class="task-item\${i.done ? ' done' : ''}">
         <span class="task-item-icon">\${i.done ? '&#10003;' : '&#9675;'}</span>
+        <span style="color:var(--muted);font-size:10px">#\${i.id}</span>
         \${esc(i.content.length > 50 ? i.content.slice(0, 50) + '…' : i.content)}
       </div>\`
     ).join('')
@@ -782,19 +787,19 @@ function renderTask(t) {
     </div>\`
   }
 
-  return \`<div class="task-card">
-    <div class="task-title">\${esc(t.title)}</div>
+  return \`<div class="task-card\${isStale ? ' stale' : ''}">
+    <div class="task-title"><span style="color:var(--muted);font-weight:400">#\${t.id}</span> \${esc(t.title)}\${staleTag}</div>
     \${desc}
     <div class="task-meta">\${age}\${branch}</div>
     \${itemsHtml}
   </div>\`
 }
 
-function renderTasks(tasks, containerId, countId) {
+function renderTasks(tasks, containerId, countId, staleIds) {
   const el = document.getElementById(containerId)
   const cnt = document.getElementById(countId)
   if (cnt) cnt.textContent = tasks.length ? '(' + tasks.length + ')' : ''
-  el.innerHTML = tasks.length ? tasks.map(renderTask).join('') : '<div class="empty">none</div>'
+  el.innerHTML = tasks.length ? tasks.map(t => renderTask(t, staleIds)).join('') : '<div class="empty">none</div>'
 }
 
 function renderCheckpoint(cp) {
@@ -904,15 +909,23 @@ function renderHeader(data) {
   const sb = document.getElementById('session-badge')
   if (data.session) {
     const cpAge = data.checkpoint ? data.checkpoint.ageMin : 999
-    if (cpAge <= 5) {
+    const tc = data.session.toolCalls || 0
+    const suffix = tc > 0 ? ' · ' + tc + ' calls' : ''
+    if (tc >= 60 || data.session.ageMin >= 90) {
+      sb.className = 'badge red'
+      sb.innerHTML = '<span class="dot"></span> LONG ' + data.session.ageMin + 'm' + suffix
+    } else if (tc >= 30 || data.session.ageMin >= 45) {
+      sb.className = 'badge yellow'
+      sb.innerHTML = '<span class="dot"></span> Aging ' + data.session.ageMin + 'm' + suffix
+    } else if (cpAge <= 5) {
       sb.className = 'badge green'
-      sb.innerHTML = '<span class="dot pulse"></span> Active ' + data.session.ageMin + 'm'
+      sb.innerHTML = '<span class="dot pulse"></span> Active ' + data.session.ageMin + 'm' + suffix
     } else if (cpAge <= 30) {
       sb.className = 'badge yellow'
-      sb.innerHTML = '<span class="dot"></span> Idle ' + data.session.ageMin + 'm'
+      sb.innerHTML = '<span class="dot"></span> Idle ' + data.session.ageMin + 'm' + suffix
     } else {
       sb.className = 'badge red'
-      sb.innerHTML = '<span class="dot"></span> Stale ' + data.session.ageMin + 'm'
+      sb.innerHTML = '<span class="dot"></span> Stale ' + data.session.ageMin + 'm' + suffix
     }
   } else {
     sb.className = 'badge'
@@ -939,6 +952,20 @@ function renderHeader(data) {
   } else {
     sigBadge.style.display = 'none'
   }
+
+  // Health badge
+  const hb = document.getElementById('health-badge')
+  const health = data.health
+  if (health) {
+    const hClass = health.level === 'good' ? 'green' : health.level === 'fair' ? 'yellow' : 'red'
+    hb.className = 'badge ' + hClass
+    hb.textContent = health.level.toUpperCase()
+    hb.title = health.reasons.length ? health.reasons.join(', ') : 'All clear'
+  } else {
+    hb.className = 'badge'
+    hb.textContent = '-'
+    hb.title = ''
+  }
 }
 
 // ── Data store (for modal lookups) ───────────────────────────────────────────
@@ -949,9 +976,10 @@ let _lastData = null
 function render(data) {
   _lastData = data
   renderHeader(data)
-  renderTasks(data.tasks.inProgress, 'col-inprogress', 'count-ip')
-  renderTasks(data.tasks.todo,       'col-todo',       'count-todo')
-  renderTasks(data.tasks.done,       'col-done',       'count-done')
+  const staleIds = new Set((data.staleTasks || []).map(t => t.id))
+  renderTasks(data.tasks.inProgress, 'col-inprogress', 'count-ip', staleIds)
+  renderTasks(data.tasks.todo,       'col-todo',       'count-todo', null)
+  renderTasks(data.tasks.done,       'col-done',       'count-done', null)
   renderCheckpoint(data.checkpoint)
   renderQuestions(data.questions)
   renderPlans(data.plans)
@@ -964,7 +992,9 @@ function render(data) {
   document.getElementById('status-left').textContent =
     'Updated ' + new Date(data.generatedAt).toLocaleTimeString()
   document.getElementById('status-right').textContent =
-    data.stats.chunks + ' memory chunks'
+    data.stats.chunks + ' chunks' +
+    (data.health ? ' · health: ' + data.health.level : '') +
+    (data.session?.toolCalls ? ' · ' + data.session.toolCalls + ' tool calls' : '')
 }
 
 // ── SSE connection ───────────────────────────────────────────────────────────

@@ -71,6 +71,19 @@ export function markContextRead(sessionId: number): void {
   ).run(sessionId)
 }
 
+export function incrementToolCalls(sessionId: number): void {
+  getDb().prepare(
+    'UPDATE sessions SET tool_calls = COALESCE(tool_calls, 0) + 1 WHERE id = ?'
+  ).run(sessionId)
+}
+
+export function getSessionToolCalls(sessionId: number): number {
+  const row = getDb().prepare(
+    'SELECT COALESCE(tool_calls, 0) as n FROM sessions WHERE id = ?'
+  ).get(sessionId) as { n: number } | undefined
+  return row?.n ?? 0
+}
+
 /** Returns decisions without rationale for a project. */
 export function getDecisionsWithoutRationale(projectId: number): Decision[] {
   return getDb().prepare(
@@ -132,6 +145,13 @@ export function getAllOpenTasks(projectId: number): Task[] {
   ).all(projectId) as unknown as Task[]
 }
 
+export function getStaleInProgressTasks(projectId: number, thresholdHours = 2): Task[] {
+  const cutoff = new Date(Date.now() - thresholdHours * 3_600_000).toISOString()
+  return getDb().prepare(
+    "SELECT * FROM tasks WHERE project_id = ? AND status = 'in-progress' AND updated_at < ? ORDER BY updated_at ASC"
+  ).all(projectId, cutoff) as unknown as Task[]
+}
+
 // ── Decisions ─────────────────────────────────────────────────────────────────
 
 export function addDecision(
@@ -145,12 +165,13 @@ export function addDecision(
   context?: string,
   files?: string,
   tags?: string,
-  taskId?: number | null
+  taskId?: number | null,
+  scope?: 'project' | 'task'
 ): Decision {
   const db = getDb()
   const info = db.prepare(
-    'INSERT INTO decisions (project_id, session_id, task_id, summary, rationale, alternatives, branch, git_commit, context, files, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(projectId, sessionId ?? null, taskId ?? null, summary, rationale ?? null, alternatives ?? null, branch ?? null, commit ?? null, context ?? null, files ?? null, tags ?? null)
+    'INSERT INTO decisions (project_id, session_id, task_id, summary, rationale, alternatives, branch, git_commit, context, files, tags, scope) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(projectId, sessionId ?? null, taskId ?? null, summary, rationale ?? null, alternatives ?? null, branch ?? null, commit ?? null, context ?? null, files ?? null, tags ?? null, scope ?? 'project')
   return db.prepare('SELECT * FROM decisions WHERE id = ?').get(lastId(info.lastInsertRowid)) as unknown as Decision
 }
 
@@ -191,6 +212,19 @@ export function archiveDecision(decisionId: number): void {
   getDb().prepare(
     "UPDATE decisions SET status = 'archived' WHERE id = ?"
   ).run(decisionId)
+}
+
+/** Archive all task-scoped decisions linked to a task and remove their memory chunks. */
+export function archiveTaskScopedDecisions(projectId: number, taskId: number): number {
+  const db = getDb()
+  const decisions = db.prepare(
+    "SELECT id FROM decisions WHERE task_id = ? AND scope = 'task' AND status = 'active'"
+  ).all(taskId) as Array<{ id: number }>
+  for (const d of decisions) {
+    db.prepare("UPDATE decisions SET status = 'archived' WHERE id = ?").run(d.id)
+    db.prepare("DELETE FROM memory_chunks WHERE project_id = ? AND source_type = 'decision' AND source_id = ?").run(projectId, d.id)
+  }
+  return decisions.length
 }
 
 /** Returns decisions created on or after the given ISO timestamp. */
@@ -297,6 +331,12 @@ export function getTaskItems(taskId: number): TaskItem[] {
 
 export function checkTaskItem(itemId: number, done: boolean): void {
   getDb().prepare('UPDATE task_items SET done = ? WHERE id = ?').run(done ? 1 : 0, itemId)
+}
+
+export function findTaskItemByContent(taskId: number, content: string): TaskItem | undefined {
+  const lower = content.toLowerCase()
+  const items = getTaskItems(taskId)
+  return items.find(i => i.content.toLowerCase().includes(lower))
 }
 
 // -- Memory chunks ------------------------------------------------------------
@@ -459,6 +499,45 @@ export function getSessionCheckpoints(sessionId: number): Checkpoint[] {
   return getDb().prepare(
     'SELECT * FROM checkpoints WHERE session_id = ? ORDER BY created_at ASC'
   ).all(sessionId) as unknown as Checkpoint[]
+}
+
+export interface SessionActivity {
+  durationMinutes: number
+  tasksCompleted: Array<{ id: number; title: string }>
+  decisionsCount: number
+  observationsCount: number
+  checkpointsCount: number
+}
+
+export function getSessionActivity(projectId: number, sessionId: number, sessionStartedAt: string): SessionActivity {
+  const db = getDb()
+  const since = sessionStartedAt
+
+  const tasksCompleted = db.prepare(
+    "SELECT id, title FROM tasks WHERE project_id = ? AND status = 'done' AND updated_at >= ? ORDER BY updated_at DESC"
+  ).all(projectId, since) as unknown as Array<{ id: number; title: string }>
+
+  const decisionsRow = db.prepare(
+    'SELECT COUNT(*) as n FROM decisions WHERE project_id = ? AND session_id = ?'
+  ).get(projectId, sessionId) as { n: number }
+
+  const observationsRow = db.prepare(
+    'SELECT COUNT(*) as n FROM notes WHERE project_id = ? AND session_id = ?'
+  ).get(projectId, sessionId) as { n: number }
+
+  const checkpointsRow = db.prepare(
+    'SELECT COUNT(*) as n FROM checkpoints WHERE session_id = ?'
+  ).get(sessionId) as { n: number }
+
+  const durationMinutes = Math.round((Date.now() - new Date(since).getTime()) / 60_000)
+
+  return {
+    durationMinutes,
+    tasksCompleted,
+    decisionsCount: decisionsRow.n,
+    observationsCount: observationsRow.n,
+    checkpointsCount: checkpointsRow.n,
+  }
 }
 
 // -- Questions ----------------------------------------------------------------

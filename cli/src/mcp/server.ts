@@ -25,6 +25,8 @@ import {
   getAllDecisions,
   addTaskItems,
   getTaskItems,
+  checkTaskItem,
+  findTaskItemByContent,
   startSession,
   getDecisionsByTask,
   getNotesByTask,
@@ -48,14 +50,20 @@ import {
   updateSessionFilesTouched,
   supersedeDecision,
   archiveDecision,
+  archiveTaskScopedDecisions,
   resolveNote,
   findUnresolvedNote,
   getPendingSignals,
   markSignalDelivered,
   markSignalAcknowledged,
   getUnacknowledgedSignals,
+  getStaleInProgressTasks,
+  getSessionActivity,
+  incrementToolCalls,
+  getSessionToolCalls,
+  getOpenObservations,
 } from '../store/queries.js'
-import { writeDecision, writeNote, writeSession, rewriteTaskList, writePlan, deletePlanFile } from '../store/markdown.js'
+import { writeDecision, writeNote, writeSession, rewriteTaskList, writePlan, deletePlanFile, SUBAGENT_INSTRUCTIONS } from '../store/markdown.js'
 import { getBranch, getCommit, getRecentLog, getDiffFiles } from '../utils/git.js'
 
 function getProject(cwd: string) {
@@ -74,29 +82,98 @@ export async function startMcpServer(cwd: string): Promise<void> {
   function contextWarning(projectId: number): string {
     const session = getActiveSession(projectId)
     if (session && !session.context_read_at) {
-      return '\n\n> **WARNING:** `kontinue_read_context` has not been called this session. Call it now before continuing — you may be working without awareness of prior decisions or open tasks.'
+      return '\n\n> **WARNING:** `read_context` has not been called this session. Call it now before continuing — you may be working without awareness of prior decisions or open tasks.'
     }
     return ''
   }
 
   // 1-line board+checkpoint footer appended to every mutation tool response
   function statusLine(projectId: number): string {
-    const open = getAllOpenTasks(projectId)
-    const ip   = open.filter(t => t.status === 'in-progress').length
-    const todo = open.filter(t => t.status === 'todo').length
-    const cp   = getLastCheckpoint(projectId)
-    const qs   = getOpenQuestions(projectId)
-    const sigs = getUnacknowledgedSignals(projectId)
+    const open    = getAllOpenTasks(projectId)
+    const ip      = open.filter(t => t.status === 'in-progress').length
+    const todo    = open.filter(t => t.status === 'todo').length
+    const cp      = getLastCheckpoint(projectId)
+    const qs      = getOpenQuestions(projectId)
+    const sigs    = getUnacknowledgedSignals(projectId)
+    const session = getActiveSession(projectId)
+    const stale   = getStaleInProgressTasks(projectId, 2)
+
     const cpAge = cp
       ? `${Math.round((Date.now() - new Date(cp.created_at).getTime()) / 60_000)}m ago`
       : 'none'
+
+    const health = computeHealthFromData(cp, session, ip, qs, stale.length)
+
+    const toolCalls = session ? getSessionToolCalls(session.id) : 0
+    const sessionMinutes = session
+      ? Math.round((Date.now() - new Date(session.started_at).getTime()) / 60_000)
+      : 0
+
     const parts = [
       `${ip} active · ${todo} todo`,
       `checkpoint: ${cpAge}`,
+      `health: ${health.level}`,
+      stale.length > 0 ? `${stale.length} stale` : '',
       qs.length > 0 ? `${qs.length} question${qs.length > 1 ? 's' : ''} open` : '',
       sigs.length > 0 ? `${sigs.length} signal${sigs.length > 1 ? 's' : ''} pending` : '',
     ].filter(Boolean)
-    return `\n\n---\n_[${parts.join(' | ')}]_`
+
+    const healthDetail = health.level !== 'good' ? `\n> _Health: ${health.reasons.join(', ')}_` : ''
+    const nudge = checkpointNudge(cp)
+
+    let pressure = ''
+    if (toolCalls >= 60 || sessionMinutes >= 90) {
+      pressure = `\n> **SESSION LONG (${toolCalls} calls, ${sessionMinutes}m) — call \`write_handoff\` now to create a recovery point before context is lost.**`
+    } else if (toolCalls >= 30 || sessionMinutes >= 45) {
+      pressure = `\n> _SESSION AGING (${toolCalls} calls, ${sessionMinutes}m) — consider writing a checkpoint or handoff._`
+    }
+
+    return `\n\n---\n_[${parts.join(' | ')}]_${healthDetail}${nudge}${pressure}`
+  }
+
+  function checkpointNudge(cp: { created_at: string } | undefined): string {
+    if (!cp) {
+      return '\n> **CHECKPOINT NEEDED:** No checkpoint exists this session. Call `checkpoint` now to create a recovery point.'
+    }
+    const minsAgo = Math.round((Date.now() - new Date(cp.created_at).getTime()) / 60_000)
+    if (minsAgo > 15) {
+      return `\n> **CHECKPOINT NEEDED (${minsAgo}m stale):** Call \`checkpoint\` now — ${minsAgo} minutes of work has no recovery record.`
+    }
+    return ''
+  }
+
+  function computeHealthFromData(
+    cp: { created_at: string } | undefined,
+    session: { context_read_at: string | null; started_at: string } | undefined,
+    ipCount: number,
+    qs: Array<{ created_at: string }>,
+    staleCount: number
+  ): { level: 'good' | 'fair' | 'poor'; reasons: string[] } {
+    const reasons: string[] = []
+    let score = 0
+
+    if (!cp) { score += 3; reasons.push('no checkpoint') }
+    else {
+      const cpMins = Math.round((Date.now() - new Date(cp.created_at).getTime()) / 60_000)
+      if (cpMins > 30) { score += 3; reasons.push(`checkpoint ${cpMins}m stale`) }
+      else if (cpMins > 15) { score += 1; reasons.push(`checkpoint ${cpMins}m ago`) }
+    }
+
+    if (session && !session.context_read_at) { score += 2; reasons.push('context not read') }
+    if (ipCount > 1) { score += 1; reasons.push(`${ipCount} tasks in-progress`) }
+
+    const oldQs = qs.filter(q => (Date.now() - new Date(q.created_at).getTime()) > 86_400_000)
+    if (oldQs.length > 0) { score += 1; reasons.push(`${oldQs.length} question${oldQs.length > 1 ? 's' : ''} >1d old`) }
+
+    if (session) {
+      const sessionMins = Math.round((Date.now() - new Date(session.started_at).getTime()) / 60_000)
+      if (sessionMins > 120) { score += 2; reasons.push(`session ${Math.floor(sessionMins / 60)}h old`) }
+    }
+
+    if (staleCount > 0) { score += 2; reasons.push(`${staleCount} stale task${staleCount > 1 ? 's' : ''}`) }
+
+    const level = score === 0 ? 'good' as const : score <= 2 ? 'fair' as const : 'poor' as const
+    return { level, reasons }
   }
 
   // Check for pending developer signals and inject into tool responses
@@ -114,14 +191,20 @@ export async function startMcpServer(cwd: string): Promise<void> {
     }
     if (signals.length > 5) lines.push(`> _(${signals.length - 5} more signals pending)_`)
     lines.push('>')
-    lines.push('> Call `kontinue_acknowledge_signal` after you have processed this.')
+    lines.push('> Call `acknowledge_signal` after you have processed this.')
     return lines.join('\n')
   }
 
-  // ── kontinue_read_context ─────────────────────────────────────────────────
+  /** Increment tool_calls counter for the active session. Call at top of every handler. */
+  function trackToolCall(projectId: number): void {
+    const session = getActiveSession(projectId)
+    if (session) incrementToolCalls(session.id)
+  }
+
+  // ── read_context ─────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_read_context',
+    'read_context',
     {
       description: [
         'REQUIRED FIRST ACTION — call this before reading any files or writing any code. Auto-starts your session.',
@@ -140,6 +223,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ mode = 'brief' }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
 
       // Auto-close zombie sessions >2h old
       closeStaleSessions(project.id, 2)
@@ -150,6 +234,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
       }
 
       const last        = getLastSession(project.id)
+      const activeSession = getActiveSession(project.id)!
       const open        = getAllOpenTasks(project.id)
       const inProgress  = open.filter(t => t.status === 'in-progress')
       const todo        = open.filter(t => t.status === 'todo')
@@ -160,9 +245,9 @@ export async function startMcpServer(cwd: string): Promise<void> {
 
       // Checkpoint staleness warning
       const cpWarn = (() => {
-        if (!lastCp) return '\n> ⚠️ **No checkpoint recorded yet.** Call `kontinue_checkpoint` after meaningful progress so this session can be resumed if context is lost.'
+        if (!lastCp) return '\n> ⚠️ **No checkpoint recorded yet.** Call `checkpoint` after meaningful progress so this session can be resumed if context is lost.'
         const minsAgo = Math.round((Date.now() - new Date(lastCp.created_at).getTime()) / 60_000)
-        if (minsAgo > 15) return `\n> ⚠️ **Last checkpoint ${minsAgo}m ago.** Call \`kontinue_checkpoint\` now — if this session ends, ${minsAgo} minutes of work has no recovery record.`
+        if (minsAgo > 15) return `\n> ⚠️ **Last checkpoint ${minsAgo}m ago.** Call \`checkpoint\` now — if this session ends, ${minsAgo} minutes of work has no recovery record.`
         return ''
       })()
 
@@ -189,12 +274,43 @@ export async function startMcpServer(cwd: string): Promise<void> {
         last?.blockers ? `\n**Blocker from last session:** ${last.blockers}` : '',
         '',
         '## In Progress',
-        ...inProgress.map(t => [
-          `- ◉ **${t.title}**${t.branch ? ` _(${t.branch})_` : ''}`,
-          t.description ? `  > ${t.description}` : '',
-        ].filter(Boolean).join('\n')),
+        ...inProgress.map(t => {
+          const taskItems = getTaskItems(t.id)
+          const itemProgress = taskItems.length > 0
+            ? ` \`[${taskItems.filter(i => i.done).length}/${taskItems.length}]\``
+            : ''
+          return [
+            `- ◉ **#${t.id} ${t.title}**${itemProgress}${t.branch ? ` _(${t.branch})_` : ''}`,
+            t.description ? `  > ${t.description}` : '',
+            ...taskItems.map(i => `  ${i.done ? '✓' : '○'} #${i.id} ${i.content}`),
+          ].filter(Boolean).join('\n')
+        }),
         inProgress.length === 0 ? '_none_' : '',
       ]
+
+      // Session activity digest — what's been done this session
+      const activity = getSessionActivity(project.id, activeSession.id, activeSession.started_at)
+      if (activity.durationMinutes > 0 || activity.tasksCompleted.length > 0 || activity.decisionsCount > 0) {
+        const dur = activity.durationMinutes >= 60
+          ? `${Math.floor(activity.durationMinutes / 60)}h ${activity.durationMinutes % 60}m`
+          : `${activity.durationMinutes}m`
+        lines.push('', '## This Session')
+        lines.push(`Duration: ${dur} | ${activity.checkpointsCount} checkpoint${activity.checkpointsCount !== 1 ? 's' : ''} | ${activity.decisionsCount} decision${activity.decisionsCount !== 1 ? 's' : ''} | ${activity.observationsCount} observation${activity.observationsCount !== 1 ? 's' : ''}`)
+        if (activity.tasksCompleted.length > 0) {
+          lines.push(`Tasks completed: ${activity.tasksCompleted.map(t => `#${t.id} ${t.title}`).join(', ')}`)
+        }
+      }
+
+      // Stale in-progress task warning
+      const staleTasks = getStaleInProgressTasks(project.id, 2)
+      if (staleTasks.length > 0) {
+        lines.push('', '## Stale Tasks')
+        lines.push('> These tasks have been in-progress for >2h without update. Consider completing, abandoning, or checkpointing them.')
+        for (const t of staleTasks) {
+          const hoursStale = Math.round((Date.now() - new Date(t.updated_at).getTime()) / 3_600_000)
+          lines.push(`- **#${t.id} ${t.title}** _(${hoursStale}h since last update)_`)
+        }
+      }
 
       // Open questions always surface
       if (openQs.length > 0) {
@@ -228,7 +344,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
         if (todo.length > 0) {
           lines.push('', '## Todo')
           for (const t of todo) {
-            lines.push(`- ○ **${t.title}**${t.description ? `\n  > ${t.description}` : ''}`)
+            lines.push(`- ○ **#${t.id} ${t.title}**${t.description ? `\n  > ${t.description}` : ''}`)
           }
         }
 
@@ -252,7 +368,6 @@ export async function startMcpServer(cwd: string): Promise<void> {
       lines.push('', '---', '_Kontinue is your task list. If a step is not checkpointed, it has not been recorded._')
 
       // Mark context read
-      const activeSession = getActiveSession(project.id)
       if (activeSession && !activeSession.context_read_at) {
         markContextRead(activeSession.id)
       }
@@ -262,10 +377,10 @@ export async function startMcpServer(cwd: string): Promise<void> {
     }
   )
 
-  // ── kontinue_update_task ──────────────────────────────────────────────────
+  // ── update_task ──────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_update_task',
+    'update_task',
     {
       description: [
         'Create, start, complete, or abandon tasks. Call this whenever you begin or finish a unit of work.',
@@ -278,24 +393,40 @@ export async function startMcpServer(cwd: string): Promise<void> {
         '- "start"   — Mark a task in-progress when you begin actively working on it.',
         '- "done"    — Mark a task completed immediately after finishing it.',
         '             Outcome: describe what was done, what files were changed, what approach was taken.',
-        '             ALWAYS follow with: kontinue_checkpoint, then kontinue_check_signals.',
-        '- "abandon" — Mark a task dropped. Always pair with kontinue_log_decision to record why.',
+        '- "abandon" — Mark a task dropped. Always pair with log_decision to record why.',
+        '- "item_done" — Mark a checklist item as done. Title matches the task, item matches the checklist item (fuzzy).',
         '',
-        'Title matching for start/done/abandon is fuzzy — a partial match is sufficient.',
+        'Title matching for start/done/abandon/item_done is fuzzy — a partial match is sufficient.',
         'Dual-writes: updates the SQLite tasks table AND rewrites .kontinue/tasks/todo.md in-place.',
+        '',
+        'Protocol: Before action="start", ensure read_context was called this session. After action="done", a checkpoint is automatically created — proceed directly to check_signals before starting the next task.',
       ].join('\n'),
       inputSchema: {
-        action:      z.enum(['add', 'start', 'done', 'abandon']).describe('"add" creates; "start" marks in-progress; "done" marks complete; "abandon" marks dropped'),
-        title:       z.string().describe('Full task title for "add", or a partial match string for "start" / "done" / "abandon"'),
+        action:      z.enum(['add', 'start', 'done', 'abandon', 'item_done']).describe('"add" creates; "start" marks in-progress; "done" marks complete; "abandon" marks dropped; "item_done" marks a checklist item complete'),
+        title:       z.string().describe('Full task title for "add", or a partial match string for other actions'),
         description: z.string().optional().describe('For "add": what needs to be done and what done looks like (acceptance criteria). Be specific.'),
-        items:       z.string().optional().describe('For "add": comma-separated checklist steps, e.g. "Write schema migration,Update queries,Add MCP tool". Each becomes a trackable sub-item.'),
+        items:       z.string().optional().describe('For "add": comma-separated checklist steps. For "item_done": partial match of the item content to mark done.'),
         outcome:     z.string().optional().describe('For "done": what was actually done, what approach was taken, which files were changed.'),
       },
     },
     async ({ action, title, description, items, outcome }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const session = getActiveSession(project.id)
 
+      if (action === 'item_done') {
+        const task = findTaskByTitle(project.id, title)
+        if (!task) return { content: [{ type: 'text' as const, text: `No open task found matching: "${title}"` }] }
+        if (!items) return { content: [{ type: 'text' as const, text: `Provide the item content to mark done via the "items" parameter.` }] }
+        const item = findTaskItemByContent(task.id, items)
+        if (!item) return { content: [{ type: 'text' as const, text: `No checklist item found matching: "${items}" on task "${task.title}"` }] }
+        checkTaskItem(item.id, true)
+        const allItems = getTaskItems(task.id)
+        const doneCount = allItems.filter(i => i.done).length
+        return { content: [{ type: 'text' as const, text: `Item #${item.id} "${item.content}" ✓ [${doneCount}/${allItems.length}] on #${task.id} "${task.title}"${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      }
+
+      let resolvedTask: { id: number; title: string }
       if (action === 'add') {
         const task = addTask(project.id, title, session?.id, getBranch(cwd), description)
         if (description) upsertChunk(project.id, 'task', task.id, `Task: ${title}\n${description}`)
@@ -303,6 +434,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
           const steps = items.split(',').map(s => s.trim()).filter(Boolean)
           addTaskItems(task.id, steps)
         }
+        resolvedTask = task
       } else {
         const task = findTaskByTitle(project.id, title)
         if (!task) return { content: [{ type: 'text' as const, text: `No open task found matching: "${title}"` }] }
@@ -311,6 +443,19 @@ export async function startMcpServer(cwd: string): Promise<void> {
         if (action === 'done' && outcome) {
           updateTaskOutcome(task.id, outcome)
           upsertChunk(project.id, 'task', task.id, `Task completed: ${task.title}\nOutcome: ${outcome}`)
+        }
+        resolvedTask = task
+      }
+
+      // Auto-checkpoint on task done — eliminates the most-ignored nudge
+      if (action === 'done') {
+        const autoProgress = `Task completed: ${resolvedTask.title}${outcome ? `. Outcome: ${outcome}` : ''}`
+        addCheckpoint(project.id, autoProgress, 'Call check_signals, then start next task.', null, session?.id ?? null, resolvedTask.id, getCommit(cwd))
+
+        // Auto-archive task-scoped decisions — they served their purpose
+        const archived = archiveTaskScopedDecisions(project.id, resolvedTask.id)
+        if (archived > 0) {
+          // No need to surface this loudly — it's automatic hygiene
         }
       }
 
@@ -327,36 +472,36 @@ export async function startMcpServer(cwd: string): Promise<void> {
         ? '\n\n> **REMINDER:** No `description` provided. Add one — it is required for handoffs to be self-contained. What does "done" look like for this task?'
         : ''
       const doneNudge = action === 'done'
-        ? '\n\n> **NEXT:** Call `kontinue_checkpoint` now to record this milestone. Then call `kontinue_check_signals` and log any decisions or observations made during this task before starting the next one.'
+        ? '\n\n> Task done + auto-checkpoint created. **NEXT:** Call `check_signals` now, then start the next task.'
         : ''
 
-      return { content: [{ type: 'text' as const, text: `Task "${title}" — ${action} ✓${warn}${descWarn}${doneNudge}${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Task #${resolvedTask.id} "${resolvedTask.title}" — ${action} ✓${warn}${descWarn}${doneNudge}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_log_decision ─────────────────────────────────────────────────
+  // ── log_decision ─────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_log_decision',
+    'log_decision',
     {
       description: [
-        'Record an architectural or implementation decision. Call this whenever you choose one approach over another.',
+        'You MUST call this after any of these trigger moments:',
+        '- You picked library A over library B',
+        '- You chose an architecture pattern, API shape, or data model',
+        '- You decided NOT to do something (skipped a refactor, avoided a dependency)',
+        '- You resolved a non-obvious trade-off the user or a future agent would ask "why?" about',
+        '- You established a convention (naming, file structure, error handling pattern)',
         '',
-        'Call this whenever you:',
-        '- Choose one technology, library, or approach over another',
-        '- Decide NOT to do something and why (e.g. dropped Redis, avoided a pattern)',
-        '- Establish a convention or constraint that future sessions should respect',
-        '- Resolve a technical trade-off that took non-trivial reasoning',
+        'If you just made a choice that a future session would need context for, call this NOW — not later.',
         '',
-        'Do NOT call this for trivial details — only decisions a future session would need context for.',
+        'Scope:',
+        '- "project" (default) — permanent decision that persists across sessions (architecture, conventions, library choices)',
+        '- "task" — temporary decision tied to the current task; auto-archived when the task is marked done',
         '',
-        'Dual-writes:',
-        '1. Inserts a row into the SQLite decisions table (indexed for search)',
-        '2. Writes .kontinue/decisions/YYYY-MM-DD-<slug>.md (human-readable, Obsidian-browsable)',
-        '3. Indexes all fields as a memory chunk for future search',
+        'Use scope="task" for implementation details that only matter while the task is active.',
+        'Use scope="project" (or omit) for decisions a future session would need to know about.',
         '',
-        'The rationale and alternatives fields are strongly recommended — they are what make memory useful across sessions.',
-        'Pass files you were actively editing when this decision was made so future agents can trace decisions back to code.',
+        'Always include rationale (why), alternatives (what else was considered), and files (what code this touches).',
       ].join('\n'),
       inputSchema: {
         summary:      z.string().describe('One-line decision written as a statement, e.g. "Chose PKCE over client_secret for public OAuth clients"'),
@@ -366,14 +511,16 @@ export async function startMcpServer(cwd: string): Promise<void> {
         files:        z.string().optional().describe('Comma-separated list of source files related to this decision, e.g. "src/auth/middleware.ts,src/db/schema.ts"'),
         tags:         z.string().optional().describe('Comma-separated category tags, e.g. "architecture,security,performance,dependency"'),
         task_title:   z.string().optional().describe('Partial title of the task this decision belongs to — links it to a board item'),
+        scope:        z.enum(['project', 'task']).optional().default('project').describe('"project" = permanent, survives across sessions. "task" = auto-archived when linked task completes.'),
       },
     },
-    async ({ summary, rationale, alternatives, context, files, tags, task_title }) => {
+    async ({ summary, rationale, alternatives, context, files, tags, task_title, scope }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const session = getActiveSession(project.id)
 
       const linkedTask = task_title ? findTaskByTitle(project.id, task_title) : null
-      const decision = addDecision(project.id, summary, rationale, alternatives, session?.id, getBranch(cwd), getCommit(cwd), context, files, tags, linkedTask?.id)
+      const decision = addDecision(project.id, summary, rationale, alternatives, session?.id, getBranch(cwd), getCommit(cwd), context, files, tags, linkedTask?.id, scope)
       writeDecision(cwd, decision)
 
       const chunkContent = [
@@ -388,33 +535,35 @@ export async function startMcpServer(cwd: string): Promise<void> {
 
       const warn = contextWarning(project.id)
       const rationaleWarn = !rationale
-        ? '\n\n> **REMINDER:** No `rationale` provided. Future agents cannot understand *why* this was decided. Call `kontinue_log_decision` again with the same `summary` plus a `rationale` to fill it in.'
+        ? '\n\n> **REMINDER:** No `rationale` provided. Future agents cannot understand *why* this was decided. Call `log_decision` again with the same `summary` plus a `rationale` to fill it in.'
+        : ''
+      const scopeNote = scope === 'task'
+        ? ' _(task-scoped — will auto-archive when task completes)_'
         : ''
 
-      return { content: [{ type: 'text' as const, text: `Decision recorded: "${summary}" → .kontinue/decisions/${warn}${rationaleWarn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Decision recorded${scopeNote}: "${summary}" → .kontinue/decisions/${warn}${rationaleWarn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_write_handoff ────────────────────────────────────────────────
+  // ── write_handoff ────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_write_handoff',
+    'write_handoff',
     {
       description: [
-        'Call this at the end of a session, or when the context window is nearing its limit.',
+        'You MUST call this when ANY of these are true — do not wait to be told:',
+        '- You just completed a major task or milestone',
+        '- The conversation has had many back-and-forth exchanges (10+ turns)',
+        '- You are about to read many large files or do a big batch of edits',
+        '- The user says goodbye, "that\'s all", or signals the end of a session',
         '',
-        'Write a handoff note that a future agent can read cold and immediately understand:',
-        '- What was accomplished (specific: name files changed, features completed, bugs fixed)',
-        '- What was NOT finished and why',
-        '- The exact next step(s) to take when the session resumes',
-        '- Important state, edge cases, or gotchas discovered that are not obvious from the code',
+        'A handoff written before context is lost saves the next session hours of re-discovery.',
+        'A handoff never written means the next agent starts blind.',
         '',
-        'Do not write vague summaries like "worked on auth". Write what you would want to read with no memory of this session.',
-        '',
-        'Dual-writes:',
-        '1. Closes the active session row in SQLite (sets ended_at, handoff_note, blockers)',
-        '2. Writes .kontinue/sessions/YYYY-MM-DD-HH-MM.md with the full note',
-        '3. Indexes the summary as a searchable memory chunk',
+        'Write what you would want to read with zero memory of this session:',
+        '- What was done (name files, functions, specific changes)',
+        '- What was NOT done and why',
+        '- The exact next step to take',
       ].join('\n'),
       inputSchema: {
         summary: z.string().describe('Specific summary of what was accomplished and what the next session should do first. Name files, functions, and decisions made.'),
@@ -423,6 +572,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ summary, blockers }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const session = getActiveSession(project.id)
       if (!session) return { content: [{ type: 'text' as const, text: 'No active session.' }] }
 
@@ -465,27 +615,25 @@ export async function startMcpServer(cwd: string): Promise<void> {
         ? '\n\n> **WARNING:** This handoff summary is very short. Name the specific files changed, functions added/fixed, and the exact next action. A vague handoff means the next agent starts blind.'
         : ''
 
-      return { content: [{ type: 'text' as const, text: `Handoff saved → .kontinue/sessions/${thinWarn}${signalCheck(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Handoff saved → .kontinue/sessions/${thinWarn}${contextWarning(project.id)}${signalCheck(project.id)}` }] }
     }
   )
 
-  // ── kontinue_add_observation ────────────────────────────────────────────────
+  // ── add_observation ────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_add_observation',
+    'add_observation',
     {
       description: [
-        'Record a mid-task finding, insight, or discovery that matters for the current or future work.',
+        'Call this IMMEDIATELY when any of these happen — do not wait until later:',
+        '- You discover something unexpected in the code (bug, constraint, quirk, undocumented behavior)',
+        '- You learn something about the project that is not obvious from reading the code',
+        '- The user clarifies scope, priority, or a requirement',
+        '- You find a potential issue you are not fixing right now but should be tracked',
+        '- You notice something that would affect a different task or future work',
         '',
-        'Use this for lightweight notes that are NOT decisions and NOT blockers:',
-        '- "Discovered the auth middleware is stateful — affects the session task"',
-        '- "The DB schema has a latent N+1 issue in the tasks query — note for later"',
-        '- "Found that the existing test suite skips integration tests by default"',
-        '- "User clarified that pagination is out of scope for this sprint"',
-        '',
-        'Observations are indexed in memory and surfaced by kontinue_search_memory.',
-        'They are lighter-weight than decisions (no rationale/alternatives required).',
-        'Link them to the task you are working on via the task_title parameter.',
+        'Rule: if you are about to mention a finding in chat, call this FIRST. Chat is ephemeral; observations persist.',
+        'Always include task_title and files so observations link to the right context.',
       ].join('\n'),
       inputSchema: {
         observation: z.string().describe('What you discovered or learned — write it so a future agent reading it has full context without reading the code'),
@@ -495,6 +643,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ observation, task_title, files }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const session = getActiveSession(project.id)
       const linkedTask = task_title ? findTaskByTitle(project.id, task_title) : null
 
@@ -508,14 +657,14 @@ export async function startMcpServer(cwd: string): Promise<void> {
       writeNote(cwd, content)
       upsertChunk(project.id, 'note', note.id, content)
 
-      return { content: [{ type: 'text' as const, text: `Observation recorded.${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Observation recorded.${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_flag_blocker ─────────────────────────────────────────────────
+  // ── flag_blocker ─────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_flag_blocker',
+    'flag_blocker',
     {
       description: [
         'Record a blocker or unresolved issue mid-session without ending it.',
@@ -525,9 +674,9 @@ export async function startMcpServer(cwd: string): Promise<void> {
         '- Requires an external decision before work can continue',
         '- Is a known issue you are consciously deferring',
         '',
-        'The blocker is saved immediately and surfaces in the next kontinue_read_context call, even if the session ends unexpectedly.',
+        'The blocker is saved immediately and surfaces in the next read_context call, even if the session ends unexpectedly.',
         '',
-        'Do not use this instead of kontinue_log_decision. Blockers are temporary obstacles; decisions are permanent records.',
+        'Do not use this instead of log_decision. Blockers are temporary obstacles; decisions are permanent records.',
       ].join('\n'),
       inputSchema: {
         blocker: z.string().describe('Clear description of what is blocked, why, and what information or action would unblock it'),
@@ -535,17 +684,18 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ blocker }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const note = addNote(project.id, `BLOCKER: ${blocker}`, getActiveSession(project.id)?.id)
       writeNote(cwd, `BLOCKER: ${blocker}`)
       upsertChunk(project.id, 'note', note.id, `Blocker: ${blocker}`)
-      return { content: [{ type: 'text' as const, text: `Blocker noted: "${blocker}"${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Blocker noted: "${blocker}"${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_search_memory ────────────────────────────────────────────────
+  // ── search_memory ────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_search_memory',
+    'search_memory',
     {
       description: [
         "Search the project's persistent memory by keyword.",
@@ -567,6 +717,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ keyword, limit, type }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const chunks = keyword
         ? searchChunks(project.id, keyword, type, limit)
         : (() => {
@@ -578,21 +729,21 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const warn = contextWarning(project.id)
 
       if (chunks.length === 0) {
-        return { content: [{ type: 'text' as const, text: `No memory indexed yet. Start a session and log some decisions.${warn}` }] }
+        return { content: [{ type: 'text' as const, text: `No memory indexed yet. Start a session and log some decisions.${warn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
       }
 
       const text = chunks
         .map(c => `### [${c.source_type}]\n${c.content}`)
         .join('\n\n---\n\n')
 
-      return { content: [{ type: 'text' as const, text: `${text}${warn}` }] }
+      return { content: [{ type: 'text' as const, text: `${text}${warn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_read_decision ────────────────────────────────────────────────
+  // ── read_decision ────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_read_decision',
+    'read_decision',
     {
       description: [
         'Look up the full details of one or more decisions by keyword.',
@@ -613,6 +764,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ keyword, limit }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const all = getAllDecisions(project.id)
       const k = keyword.toLowerCase()
       const matches = all
@@ -629,7 +781,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const warn = contextWarning(project.id)
 
       if (matches.length === 0) {
-        return { content: [{ type: 'text' as const, text: `No decisions found matching "${keyword}".${warn}` }] }
+        return { content: [{ type: 'text' as const, text: `No decisions found matching "${keyword}".${warn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
       }
 
       const text = matches.map(d => [
@@ -644,27 +796,34 @@ export async function startMcpServer(cwd: string): Promise<void> {
         d.files ? `\n**Files:** ${d.files}` : '',
       ].filter(l => l !== null).join('\n')).join('\n\n---\n\n')
 
-      return { content: [{ type: 'text' as const, text: `${text}${warn}` }] }
+      return { content: [{ type: 'text' as const, text: `${text}${warn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_update_plan ──────────────────────────────────────────────────
+  // ── update_plan ──────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_update_plan',
+    'update_plan',
     {
       description: [
-        'Create or update a structured plan — a sequence of steps toward a goal.',
+        'Persist a plan AFTER the user has approved it. Do NOT call this to brainstorm — draft plans in chat first.',
+        '',
+        'Workflow:',
+        '1. Detect that multi-step work is needed (3+ steps, multiple files/phases).',
+        '2. Draft the plan in chat: show title, goal, and numbered steps. Ask the user to confirm.',
+        '3. ONLY after the user approves (or adjusts), call this tool with action="add" to persist.',
         '',
         'Actions:',
-        '- "add"      — Create a new plan. Provide title, optional goal, optional comma-separated steps.',
-        '- "status"   — Change plan status: draft | active | complete | archived.',
-        '- "step_done"   — Mark a step done by partial content match.',
-        '- "step_skip"   — Mark a step skipped.',
-        '- "step_add"    — Append a new step to an existing plan.',
-        '- "delete"   — Delete the plan entirely.',
+        '- "add"       — Persist an approved plan. Provide title, optional goal, optional comma-separated steps.',
+        '- "status"    — Change plan status: draft | active | complete | archived.',
+        '- "step_done" — Mark a step done by partial content match.',
+        '- "step_skip" — Mark a step skipped.',
+        '- "step_add"  — Append a new step to an existing plan.',
+        '- "delete"    — Delete the plan entirely.',
         '',
         'Dual-writes: SQLite + .kontinue/plans/<slug>.md',
+        '',
+        'Step-level updates (step_done, step_skip, step_add) and status changes do NOT require user approval — they track execution progress.',
       ].join('\n'),
       inputSchema: {
         action:  z.enum(['add', 'status', 'step_done', 'step_skip', 'step_add', 'delete']),
@@ -677,6 +836,8 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ action, title, goal, steps, status, step }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
+      const helpers = `${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}`
 
       if (action === 'add') {
         const plan = createPlan(project.id, title, goal)
@@ -684,29 +845,29 @@ export async function startMcpServer(cwd: string): Promise<void> {
           ? addPlanSteps(plan.id, steps.split(',').map(s => s.trim()).filter(Boolean))
           : []
         writePlan(cwd, plan, planSteps)
-        return { content: [{ type: 'text' as const, text: `Plan created: "${plan.title}" → .kontinue/plans/` }] }
+        return { content: [{ type: 'text' as const, text: `Plan created: "${plan.title}" → .kontinue/plans/${helpers}` }] }
       }
 
       const plan = findPlanByTitle(project.id, title)
-      if (!plan) return { content: [{ type: 'text' as const, text: `No plan found matching: "${title}"` }] }
+      if (!plan) return { content: [{ type: 'text' as const, text: `No plan found matching: "${title}"${helpers}` }] }
 
       if (action === 'status') {
-        if (!status) return { content: [{ type: 'text' as const, text: 'Provide --status: draft | active | complete | archived' }] }
+        if (!status) return { content: [{ type: 'text' as const, text: `Provide --status: draft | active | complete | archived${helpers}` }] }
         updatePlanStatus(plan.id, status)
         if (goal) updatePlanGoal(plan.id, goal)
       } else if (action === 'step_add') {
-        if (!step) return { content: [{ type: 'text' as const, text: 'Provide step content via "step" parameter' }] }
+        if (!step) return { content: [{ type: 'text' as const, text: `Provide step content via "step" parameter${helpers}` }] }
         addPlanSteps(plan.id, [step])
       } else if (action === 'step_done' || action === 'step_skip') {
-        if (!step) return { content: [{ type: 'text' as const, text: 'Provide partial step content to match' }] }
+        if (!step) return { content: [{ type: 'text' as const, text: `Provide partial step content to match${helpers}` }] }
         const allSteps = getPlanSteps(plan.id)
         const match = allSteps.find(s => s.content.toLowerCase().includes(step.toLowerCase()))
-        if (!match) return { content: [{ type: 'text' as const, text: `No step found matching: "${step}"` }] }
+        if (!match) return { content: [{ type: 'text' as const, text: `No step found matching: "${step}"${helpers}` }] }
         updatePlanStepStatus(match.id, action === 'step_done' ? 'done' : 'skipped')
       } else if (action === 'delete') {
         deletePlanFile(cwd, plan)
         deletePlan(plan.id)
-        return { content: [{ type: 'text' as const, text: `Plan deleted: "${plan.title}"` }] }
+        return { content: [{ type: 'text' as const, text: `Plan deleted: "${plan.title}"${helpers}` }] }
       }
 
       // Re-fetch and rewrite markdown
@@ -714,14 +875,14 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const freshSteps = getPlanSteps(plan.id)
       writePlan(cwd, updated, freshSteps)
 
-      return { content: [{ type: 'text' as const, text: `Plan "${plan.title}" — ${action} ✓` }] }
+      return { content: [{ type: 'text' as const, text: `Plan "${plan.title}" — ${action} ✓${helpers}` }] }
     }
   )
 
-  // ── kontinue_read_entity ──────────────────────────────────────────────────
+  // ── read_entity ──────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_read_entity',
+    'read_entity',
     {
       description: [
         'Look up everything Kontinue knows about a specific named concept — a file, module, API, data model, service, or pattern.',
@@ -739,6 +900,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ keyword }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const chunks = getAllChunks(project.id)
       const k = keyword.toLowerCase()
       const matches = chunks.filter(c => c.content.toLowerCase().includes(k)).slice(0, 3)
@@ -746,14 +908,14 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const text = matches.length
         ? matches.map(c => `[${c.source_type}]\n${c.content}`).join('\n\n---\n\n')
         : `No entity found matching "${keyword}".`
-      return { content: [{ type: 'text' as const, text: `${text}${warn}` }] }
+      return { content: [{ type: 'text' as const, text: `${text}${warn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_checkpoint ───────────────────────────────────────────────────
+  // ── checkpoint ───────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_checkpoint',
+    'checkpoint',
     {
       description: [
         'Save a mid-task progress snapshot. Call this every 10–15 minutes during active work, and after any significant step.',
@@ -769,6 +931,8 @@ export async function startMcpServer(cwd: string): Promise<void> {
         '- Every ~15 min during long uninterrupted work',
         '',
         'Keep it short and specific. "Refactored Redis connection. Halfway through rate limiter." not "working on task".',
+        '',
+        'Protocol: Auto-created on task done. Call manually after reasoning-heavy edits and every 15 minutes of active work. Write concrete state: name files and functions.',
       ].join('\n'),
       inputSchema: {
         progress:    z.string().describe('What has been done since the last checkpoint — specific, naming files and functions'),
@@ -779,6 +943,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ progress, next_step, files_active, task_title }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const session = getActiveSession(project.id)
       const linkedTask = task_title ? findTaskByTitle(project.id, task_title) : null
       const commit = getCommit(cwd)
@@ -794,14 +959,14 @@ export async function startMcpServer(cwd: string): Promise<void> {
       )
 
       const resumeNote = next_step ? `\n\nNext: ${next_step}` : ''
-      return { content: [{ type: 'text' as const, text: `Checkpoint saved ✓${resumeNote}\n\n_If this session ends, the next agent will resume from here._${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Checkpoint saved ✓${resumeNote}\n\n_If this session ends, the next agent will resume from here._${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_ask_question ─────────────────────────────────────────────────
+  // ── ask_question ─────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_ask_question',
+    'ask_question',
     {
       description: [
         'Record an open question that is not blocking current work but should be answered.',
@@ -812,7 +977,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
         '- You noticed a potential issue that needs review but is not urgent',
         '',
         'Open questions surface in every read_context brief until answered.',
-        'Answer them with kontinue_answer_question.',
+        'Answer them with answer_question.',
       ].join('\n'),
       inputSchema: {
         question:   z.string().describe('The question — specific enough that a future agent or human knows exactly what needs answering'),
@@ -821,19 +986,20 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ question, task_title }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const session = getActiveSession(project.id)
       const linkedTask = task_title ? findTaskByTitle(project.id, task_title) : null
       addQuestion(project.id, question, session?.id ?? null, linkedTask?.id ?? null)
-      return { content: [{ type: 'text' as const, text: `Question recorded: "${question}"\n\nIt will surface in every read_context until answered via kontinue_answer_question.${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Question recorded: "${question}"\n\nIt will surface in every read_context until answered via answer_question.${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_answer_question ──────────────────────────────────────────────
+  // ── answer_question ──────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_answer_question',
+    'answer_question',
     {
-      description: 'Resolve an open question recorded with kontinue_ask_question.',
+      description: 'Resolve an open question recorded with ask_question.',
       inputSchema: {
         question: z.string().describe('Partial match of the question to resolve'),
         answer:   z.string().describe('The answer or decision that resolves this question'),
@@ -841,28 +1007,30 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ question, answer }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const q = findOpenQuestion(project.id, question)
       if (!q) return { content: [{ type: 'text' as const, text: `No open question found matching: "${question}"` }] }
       answerQuestion(q.id, answer)
-      return { content: [{ type: 'text' as const, text: `Question resolved ✓\nQ: ${q.question}\nA: ${answer}${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Question resolved ✓\nQ: ${q.question}\nA: ${answer}${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_supersede_decision ───────────────────────────────────────────
+  // ── supersede_decision ───────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_supersede_decision',
+    'supersede_decision',
     {
       description: [
-        'Replace an old decision with a new one. The old decision is marked as superseded and removed from active context.',
+        'Call this when you are about to contradict or override something read_context showed as an active decision.',
         '',
-        'Use this when:',
-        '- You made a decision earlier that is now wrong or outdated',
-        '- Circumstances changed and a different approach is needed',
-        '- You want to evolve a provisional decision into a confirmed one',
+        'Triggers:',
+        '- You just chose an approach that conflicts with a logged decision',
+        '- The user told you to change direction on something you previously decided',
+        '- A decision you made earlier turned out to be wrong after implementation',
+        '- You are confirming a provisional/experimental decision as final',
         '',
-        'The old decision stays in history but no longer appears in read_context or search_memory.',
-        'Pass the old decision summary (partial match) and the new decision details.',
+        'The old decision is archived (stays in history but removed from active context).',
+        'Always include rationale explaining WHY the old decision was replaced.',
       ].join('\n'),
       inputSchema: {
         old_summary:  z.string().describe('Partial match of the old decision summary to supersede'),
@@ -877,6 +1045,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ old_summary, summary, rationale, alternatives, context, files, tags, task_title }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const session = getActiveSession(project.id)
 
       // Find the old decision
@@ -905,14 +1074,14 @@ export async function startMcpServer(cwd: string): Promise<void> {
       ].filter(Boolean).join('\n')
       upsertChunk(project.id, 'decision', newDecision.id, chunkContent)
 
-      return { content: [{ type: 'text' as const, text: `Decision superseded ✓\nOld: "${old.summary}" → archived\nNew: "${summary}"${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Decision superseded ✓\nOld: "${old.summary}" → archived\nNew: "${summary}"${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_resolve_observation ──────────────────────────────────────────
+  // ── resolve_observation ──────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_resolve_observation',
+    'resolve_observation',
     {
       description: [
         'Mark an observation/note as resolved — it has been addressed and is no longer relevant to active work.',
@@ -930,18 +1099,19 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ observation }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const note = findUnresolvedNote(project.id, observation)
       if (!note) return { content: [{ type: 'text' as const, text: `No unresolved observation found matching: "${observation}"` }] }
       resolveNote(note.id)
       deleteChunk(project.id, 'note', note.id)
-      return { content: [{ type: 'text' as const, text: `Observation resolved ✓: "${note.content.slice(0, 80)}..."${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Observation resolved ✓: "${note.content.slice(0, 80)}..."${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_check_signals ─────────────────────────────────────────────────
+  // ── check_signals ─────────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_check_signals',
+    'check_signals',
     {
       description: [
         'Check for pending developer signals (messages, priority changes, answers to your questions).',
@@ -954,9 +1124,10 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async () => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       const signals = getUnacknowledgedSignals(project.id)
       if (signals.length === 0) {
-        return { content: [{ type: 'text' as const, text: `No pending signals.${statusLine(project.id)}` }] }
+        return { content: [{ type: 'text' as const, text: `No pending signals.${contextWarning(project.id)}${statusLine(project.id)}` }] }
       }
       const lines = ['## Developer Signals', '']
       for (const s of signals) {
@@ -968,15 +1139,15 @@ export async function startMcpServer(cwd: string): Promise<void> {
         if (s.status === 'pending') markSignalDelivered(s.id)
       }
       lines.push('')
-      lines.push('Call `kontinue_acknowledge_signal` after processing.')
-      return { content: [{ type: 'text' as const, text: `${lines.join('\n')}${statusLine(project.id)}` }] }
+      lines.push('Call `acknowledge_signal` after processing.')
+      return { content: [{ type: 'text' as const, text: `${lines.join('\n')}${contextWarning(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
-  // ── kontinue_acknowledge_signal ────────────────────────────────────────────
+  // ── acknowledge_signal ────────────────────────────────────────────
 
   server.registerTool(
-    'kontinue_acknowledge_signal',
+    'acknowledge_signal',
     {
       description: [
         'Acknowledge developer signal(s) after processing them.',
@@ -991,6 +1162,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
     },
     async ({ signal_id, response }) => {
       const project = getProject(cwd)
+      trackToolCall(project.id)
       if (signal_id) {
         markSignalAcknowledged(signal_id)
       } else {
@@ -998,7 +1170,153 @@ export async function startMcpServer(cwd: string): Promise<void> {
         for (const s of delivered) markSignalAcknowledged(s.id)
       }
       const msg = response ? `Signal(s) acknowledged: ${response}` : 'Signal(s) acknowledged.'
-      return { content: [{ type: 'text' as const, text: `${msg}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `${msg}${contextWarning(project.id)}${statusLine(project.id)}` }] }
+    }
+  )
+
+  // ── prepare_delegation ─────────────────────────────────────────────
+
+  server.registerTool(
+    'prepare_delegation',
+    {
+      description: [
+        'Prepare a delegation brief before spawning a subagent via the Agent tool.',
+        '',
+        'Call this BEFORE using the Agent tool. It searches Kontinue memory for relevant context',
+        'and returns a structured brief you can include in the subagent prompt.',
+        '',
+        'The brief includes: active task context, relevant decisions and observations,',
+        'memory search results, and a compact instruction block for the subagent.',
+        '',
+        'Protocol: Always call this before spawning subagents. After the subagent returns,',
+        'persist key findings via add_observation and log_decision. Never rely on subagent',
+        'chat results — they are lost on compaction.',
+      ].join('\n'),
+      inputSchema: {
+        task: z.string().describe('What the subagent will do — used to search relevant memory'),
+      },
+    },
+    async ({ task }) => {
+      const project = getProject(cwd)
+      trackToolCall(project.id)
+      const session = getActiveSession(project.id)
+
+      const lines: string[] = ['## Delegation Brief', '']
+
+      // ── Context: active task, plan, decisions, observations ──
+      lines.push('### Context')
+      const ipTasks = getAllOpenTasks(project.id).filter(t => t.status === 'in-progress')
+      if (ipTasks.length > 0) {
+        const t = ipTasks[0]
+        const items = getTaskItems(t.id)
+        const doneItems = items.filter(i => i.done)
+        lines.push(`**Active task:** #${t.id} ${t.title}${t.description ? ` — ${t.description}` : ''}`)
+        if (items.length > 0) {
+          lines.push(`**Progress:** ${doneItems.length}/${items.length} items done`)
+          for (const item of items) {
+            lines.push(`  ${item.done ? '✓' : '○'} ${item.content}`)
+          }
+        }
+        // Task-linked decisions
+        const taskDecisions = getDecisionsByTask(t.id)
+        if (taskDecisions.length > 0) {
+          lines.push('')
+          lines.push('**Task decisions:**')
+          for (const d of taskDecisions.slice(0, 5)) {
+            lines.push(`- ${d.summary}${d.rationale ? ` — ${d.rationale.slice(0, 100)}` : ''}`)
+          }
+        }
+        // Task-linked observations
+        const taskNotes = getNotesByTask(t.id)
+        if (taskNotes.length > 0) {
+          lines.push('')
+          lines.push('**Task observations:**')
+          for (const n of taskNotes.slice(0, 5)) {
+            lines.push(`- ${n.content.slice(0, 120)}`)
+          }
+        }
+      } else {
+        lines.push('_No active in-progress task._')
+      }
+
+      // Active plan
+      const plans = getActivePlans(project.id)
+      if (plans.length > 0) {
+        const plan = plans[0]
+        const steps = getPlanSteps(plan.id)
+        const currentStep = steps.find(s => s.status === 'pending' || s.status === 'in-progress')
+        lines.push('')
+        lines.push(`**Active plan:** ${plan.title}${plan.goal ? ` — ${plan.goal}` : ''}`)
+        if (currentStep) lines.push(`**Current step:** ${currentStep.content}`)
+      }
+
+      // Open questions
+      const questions = getOpenQuestions(project.id)
+      if (questions.length > 0) {
+        lines.push('')
+        lines.push('**Open questions:**')
+        for (const q of questions.slice(0, 3)) {
+          lines.push(`- ${q.question}`)
+        }
+      }
+
+      // Project-wide active decisions
+      const activeDecisions = getActiveDecisions(project.id, 5)
+      if (activeDecisions.length > 0) {
+        lines.push('')
+        lines.push('**Active decisions:**')
+        for (const d of activeDecisions) {
+          lines.push(`- ${d.summary}`)
+        }
+      }
+
+      // ── Memory search ──
+      lines.push('')
+      lines.push('### Relevant Memory')
+      // Extract keywords from task description
+      const stopWords = new Set(['the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'shall', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as', 'into', 'through', 'during', 'before', 'after', 'above', 'below', 'between', 'out', 'off', 'over', 'under', 'again', 'further', 'then', 'once', 'and', 'but', 'or', 'nor', 'not', 'so', 'yet', 'both', 'either', 'neither', 'each', 'every', 'all', 'any', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'only', 'own', 'same', 'than', 'too', 'very', 'just', 'because', 'if', 'when', 'where', 'how', 'what', 'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'it', 'its', 'i', 'me', 'my', 'we', 'our', 'you', 'your', 'he', 'him', 'his', 'she', 'her', 'they', 'them', 'their'])
+      const keywords = task.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w))
+      const searchTerms = keywords.slice(0, 3)
+
+      let memoryResults: Array<{ content: string; source_type: string }> = []
+      for (const term of searchTerms) {
+        const results = searchChunks(project.id, term, undefined, 3)
+        for (const r of results) {
+          if (!memoryResults.some(m => m.content === r.content)) {
+            memoryResults.push(r)
+          }
+        }
+      }
+      memoryResults = memoryResults.slice(0, 5)
+
+      if (memoryResults.length > 0) {
+        for (const chunk of memoryResults) {
+          lines.push(`- [${chunk.source_type}] ${chunk.content.slice(0, 150)}`)
+        }
+      } else {
+        lines.push('_No relevant memory found for this task._')
+      }
+
+      // ── Instructions for parent agent ──
+      lines.push('')
+      lines.push('### Instructions for Parent Agent')
+      lines.push('After the subagent returns:')
+      lines.push('1. Persist key findings via `add_observation`')
+      lines.push('2. If findings influence a decision, log via `log_decision`')
+      lines.push('3. Update task items if applicable via `update_task` action=`item_done`')
+      lines.push('4. Do NOT rely on subagent results in chat — they will be lost on compaction')
+
+      // ── Subagent instructions block (include in prompt) ──
+      lines.push('')
+      lines.push('### Subagent Instructions (include in prompt)')
+      lines.push('Copy the block below into the Agent tool\'s `prompt` parameter:')
+      lines.push('')
+      lines.push('```')
+      lines.push(SUBAGENT_INSTRUCTIONS)
+      lines.push('```')
+
+      const text = lines.join('\n')
+      return { content: [{ type: 'text' as const, text: `${text}${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 

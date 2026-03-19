@@ -26,9 +26,9 @@ You have access to a persistent memory system via the **Kontinue MCP tools**. Th
 
 ## Session Lifecycle
 
-- **Start**: Always call `kontinue_read_context` first. Resume in-progress tasks from previous sessions.
+- **Start**: Always call `read_context` first. Resume in-progress tasks from previous sessions.
 - **During**: Checkpoint every ~15 minutes. Persist observations and decisions as they happen. One task in-progress at a time.
-- **End**: Call `kontinue_write_handoff` with concrete summary (name files, functions, exact state). Also call it **proactively before compaction** — when the conversation is long, after a major milestone, or before a large block of tool calls.
+- **End**: Call `write_handoff` with concrete summary (name files, functions, exact state). Also call it **proactively before compaction** — when the conversation is long, after a major milestone, or before a large block of tool calls.
 
 ---
 
@@ -37,7 +37,7 @@ You have access to a persistent memory system via the **Kontinue MCP tools**. Th
 When the context window compresses, you lose chat history but Kontinue persists. This is by design.
 
 **After compaction:**
-1. Call `kontinue_read_context` — it has everything
+1. Call `read_context` — it has everything
 2. Check the latest checkpoint for where work stopped
 3. Read active tasks for what "done" looks like
 4. Resume work — do NOT ask the user "what were we doing?"
@@ -62,16 +62,16 @@ When the context window compresses, you lose chat history but Kontinue persists.
 
 | Tool | When |
 |---|---|
-| `kontinue_read_context` | Always first. After compaction. |
-| `kontinue_update_task` | Add (with description), start, done (with outcome), abandon |
-| `kontinue_log_decision` | Chose one approach over another. Always: rationale, alternatives, context, files, tags |
-| `kontinue_add_observation` | **Any** finding, bug, constraint, scope clarification, or discovery — not just generic mid-task notes. Always include task_title and files. If you'd otherwise say it only in chat, it belongs here. |
-| `kontinue_checkpoint` | Every ~15 min or after significant step |
-| `kontinue_flag_blocker` | Cannot proceed without external input |
-| `kontinue_ask_question` / `answer_question` | Uncertainty that doesn't block but needs resolution |
-| `kontinue_search_memory` / `read_entity` | Before modifying unfamiliar code |
-| `kontinue_update_plan` | **Required** whenever the goal has 3+ steps or multiple phases — create the plan before starting tasks, without waiting to be asked |
-| `kontinue_write_handoff` | Session end **or proactively when the conversation is long / a major milestone is reached** — before compaction, not after. |
+| `read_context` | Always first. After compaction. |
+| `update_task` | Add (with description), start, done (with outcome), abandon |
+| `log_decision` | Chose one approach over another. Always: rationale, alternatives, context, files, tags |
+| `add_observation` | **Any** finding, bug, constraint, scope clarification, or discovery — not just generic mid-task notes. Always include task_title and files. If you'd otherwise say it only in chat, it belongs here. |
+| `checkpoint` | Every ~15 min or after significant step |
+| `flag_blocker` | Cannot proceed without external input |
+| `ask_question` / `answer_question` | Uncertainty that doesn't block but needs resolution |
+| `search_memory` / `read_entity` | Before modifying unfamiliar code |
+| `update_plan` | **Required** whenever the goal has 3+ steps or multiple phases — create the plan before starting tasks, without waiting to be asked |
+| `write_handoff` | Session end **or proactively when the conversation is long / a major milestone is reached** — before compaction, not after. |
 
 ---
 

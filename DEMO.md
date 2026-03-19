@@ -20,14 +20,14 @@ The twist: the feature touches multiple layers of the codebase and is too large 
 
 ### What the agent does (with Kontinue):
 
-**1. Reads context first** — `kontinue_read_context`
+**1. Reads context first** — `read_context`
 ```
 No prior sessions. Clean slate.
 ```
 
 **2. Explores the codebase** — reads `src/commands/decision.ts`, `src/store/queries.ts`, `src/store/markdown.ts` to understand existing patterns before writing anything.
 
-**3. Captures intent as a task** — `kontinue_update_task`
+**3. Captures intent as a task** — `update_task`
 ```
 Title: Add kontinue export command
 Description: New CLI command that generates a portable Markdown report of
@@ -39,7 +39,7 @@ Description: New CLI command that generates a portable Markdown report of
   - Command follows the same patterns as src/commands/decision.ts and src/commands/log.ts
 ```
 
-**4. Creates a plan** — `kontinue_update_plan`
+**4. Creates a plan** — `update_plan`
 ```
 Plan: kontinue export command
 Steps:
@@ -52,7 +52,7 @@ Steps:
 
 **5. Starts executing** — adds `getDecisionsSince()` and `getSessionsSince()` to `src/store/queries.ts`, then starts on the markdown template. Hits a design question:
 
-**6. Logs a decision** — `kontinue_log_decision`
+**6. Logs a decision** — `log_decision`
 ```
 Summary: Export defaults to 30-day lookback window, not "all time"
 Rationale: Projects accumulate hundreds of decisions over months. A full
@@ -64,7 +64,7 @@ Files: src/commands/export.ts, src/store/queries.ts
 Tags: ux, cli
 ```
 
-**7. Checkpoints progress** — `kontinue_checkpoint`
+**7. Checkpoints progress** — `checkpoint`
 ```
 Completed plan steps 1-2.
   Added getDecisionsSince(projectId, days) and getSessionsSince(projectId, days)
@@ -102,7 +102,7 @@ NOT finished: src/commands/export.ts does not exist yet. Needs to:
 
 ### What the agent does:
 
-**1. Reads context** — `kontinue_read_context`
+**1. Reads context** — `read_context`
 ```
 Last session accomplished:
   - getDecisionsSince() and getSessionsSince() in src/store/queries.ts:210
@@ -119,7 +119,7 @@ Plan: export command — steps 1-2 done, step 3 next.
 
 **2. Resumes immediately** — no "what were we working on?" questions. Creates `src/commands/export.ts` following the same `Command` + `Flags` + `requireProject()` pattern seen in `src/commands/decision.ts`.
 
-**3. Discovers an edge case, logs an observation** — `kontinue_add_observation`
+**3. Discovers an edge case, logs an observation** — `add_observation`
 ```
 Observation: renderExportReport() in src/store/markdown.ts escapes decision
   summaries with HTML entities when summaries contain angle brackets
@@ -163,9 +163,9 @@ All 5 plan steps complete. HTML-entity edge case noted as follow-up observation.
 
 ### What the agent does:
 
-**1. Reads context** — `kontinue_read_context`. No active tasks.
+**1. Reads context** — `read_context`. No active tasks.
 
-**2. Searches memory** — `kontinue_search_memory` for "export"
+**2. Searches memory** — `search_memory` for "export"
 ```
 Decision (Session 1): Export defaults to 30-day lookback window, not "all time"
 Rationale: Projects accumulate hundreds of decisions over months. Full export

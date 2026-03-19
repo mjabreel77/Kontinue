@@ -35,7 +35,7 @@ Do not ask for permission to do obvious next steps. If an audit reveals a securi
 ## 2. Session Lifecycle
 
 ### Starting a session
-**Always call `kontinue_read_context` first.** Before reading files, before asking questions, before writing code.
+**Always call `read_context` first.** Before reading files, before asking questions, before writing code.
 
 This tells you:
 - What the last session accomplished and what was left unfinished
@@ -46,17 +46,17 @@ This tells you:
 If there are in-progress tasks from a previous session, **resume them** unless the user gives you a different goal.
 
 ### During a session
-- **Checkpoint every 15 minutes** or after any significant step via `kontinue_checkpoint`
-- **After completing any task:** call `kontinue_checkpoint` immediately, then `kontinue_check_signals` — do this before starting the next task, every time
+- **Checkpoint every 15 minutes** or after any significant step via `checkpoint`
+- **After completing any task:** call `checkpoint` immediately, then `check_signals` — do this before starting the next task, every time
 - **Persist as you go** — don't batch observations or decisions for later
 - **Log observations immediately** when you discover something — not after finishing the task, not at the end of the session: right now
 - One task `in_progress` at a time. Complete it before starting the next.
-- **Self-monitor for context length.** If the conversation is long (many exchanges, large files read, many tool calls), call `kontinue_write_handoff` proactively — do not wait for compaction to happen.
+- **Self-monitor for context length.** If the conversation is long (many exchanges, large files read, many tool calls), call `write_handoff` proactively — do not wait for compaction to happen.
 
 ### Ending a session
-Call `kontinue_write_handoff` with a summary that a cold agent can act on immediately. Name files, functions, exact state. The handoff is the contract between you and the next agent.
+Call `write_handoff` with a summary that a cold agent can act on immediately. Name files, functions, exact state. The handoff is the contract between you and the next agent.
 
-### Pre-compaction triggers — call `kontinue_write_handoff` when ANY of these are true:
+### Pre-compaction triggers — call `write_handoff` when ANY of these are true:
 - The conversation has had many back-and-forth exchanges
 - You have just completed a major task or milestone
 - You are about to read many large files or make many tool calls
@@ -71,7 +71,7 @@ Do not wait to be told. **A handoff written before compaction is infinitely more
 When the conversation is compressed (context window limit), **you lose chat history but Kontinue persists.** This is by design — Kontinue is the source of truth, not the conversation.
 
 ### When you detect compaction has occurred (messages seem to start mid-conversation):
-1. **Call `kontinue_read_context`** immediately — it has everything you need
+1. **Call `read_context`** immediately — it has everything you need
 2. **Check the latest checkpoint** — it shows exactly where work stopped
 3. **Read active tasks** — they tell you what you were doing and what "done" looks like
 4. **Search memory** if the checkpoint references something you need context on
@@ -102,7 +102,7 @@ When the user gives you a task:
 
 ### Step 2: Decompose and Plan
 - Break the goal into concrete, executable steps
-- If the goal has 3 or more steps or spans multiple phases, **create a plan immediately** with `kontinue_update_plan` — do not wait to be asked
+- If the goal has 3 or more steps or spans multiple phases, **create a plan immediately** with `update_plan` — do not wait to be asked
 - If a step requires research first, do the research — don't ask if you should
 - If there are dependencies, note them in the task description
 
@@ -115,9 +115,9 @@ When the user gives you a task:
 - **Do not stop at analysis** — analysis is a means, not an end
 
 ### Inter-task Ritual (do this every time a task is marked done)
-1. `kontinue_update_task` action=`done` with outcome
-2. `kontinue_checkpoint` — record what was accomplished
-3. `kontinue_check_signals` — check for developer signals before starting something new
+1. `update_task` action=`done` with outcome
+2. `checkpoint` — record what was accomplished
+3. `check_signals` — check for developer signals before starting something new
 4. Then and only then: start the next task
 
 ### Step 4: Report Outcome
@@ -132,51 +132,57 @@ When the user gives you a task:
 ### Task Management
 | Situation | Action |
 |---|---|
-| New work from user | `kontinue_update_task` action=`add` with description + acceptance criteria |
-| Begin working | `kontinue_update_task` action=`start` |
-| Work complete and verified | `kontinue_update_task` action=`done` with outcome |
-| Dropping or deferring work | `kontinue_update_task` action=`abandon` + log decision explaining why |
+| New work from user | `update_task` action=`add` with description + acceptance criteria |
+| Begin working | `update_task` action=`start` |
+| Work complete and verified | `update_task` action=`done` with outcome |
+| Dropping or deferring work | `update_task` action=`abandon` + log decision explaining why |
 
 **Always include `description`** on add (self-contained, future-agent readable).
 **Always include `outcome`** on done (approach taken, files changed, caveats).
 
 ### Decisions
-Call `kontinue_log_decision` when you choose one approach over another, decide NOT to do something, or establish a convention.
+Call `log_decision` when you choose one approach over another, decide NOT to do something, or establish a convention.
 
 Always populate: `rationale`, `alternatives`, `context` (the trigger), `files`, `tags`.
 
-When a decision becomes outdated, call `kontinue_supersede_decision` with the old summary and the new decision details. This archives the old decision and stops it from appearing in context.
+When a decision becomes outdated, call `supersede_decision` with the old summary and the new decision details. This archives the old decision and stops it from appearing in context.
 
 ### Observations
-Call `kontinue_add_observation` for mid-task discoveries that are not decisions and not blockers. Always include `task_title` and `files`.
+Call `add_observation` for mid-task discoveries that are not decisions and not blockers. Always include `task_title` and `files`.
 
 **Use observations for:** bugs found, audit findings, constraints discovered, scope clarifications, unexpected code behaviour, security issues, anything you would otherwise only say in chat.
 
-When an observation has been addressed (bug fixed, constraint removed), call `kontinue_resolve_observation` to clean it from active context.
+When an observation has been addressed (bug fixed, constraint removed), call `resolve_observation` to clean it from active context.
 
 ### Memory Lookup
-Call `kontinue_search_memory` with a keyword (e.g. "auth", "migration") before modifying code you haven't worked with in this session. Use `kontinue_read_entity` for entity-specific lookup.
+Call `search_memory` with a keyword (e.g. "auth", "migration") before modifying code you haven't worked with in this session. Use `read_entity` for entity-specific lookup.
 
 ### Blockers and Questions
-- `kontinue_flag_blocker` — you cannot proceed without external input
-- `kontinue_ask_question` — uncertainty that doesn't block current work but needs resolution
-- `kontinue_answer_question` — resolve a previously logged question
+- `flag_blocker` — you cannot proceed without external input
+- `ask_question` — uncertainty that doesn't block current work but needs resolution
+- `answer_question` — resolve a previously logged question
 
 ### Plans — When and How
-**Always create a plan before starting any work that spans multiple tasks.** You do not wait for the user to say "make a plan" — you detect the need from the goal itself.
+**Always plan before starting any work that spans multiple tasks.** You detect the need from the goal itself.
 
-Create a plan whenever:
+Plan whenever:
 - The goal has 3 or more distinct steps
 - Work spans multiple files, layers, or phases
 - An audit, refactor, or feature touches several components
 - The user's request implies a sequence even without explicitly mentioning a plan
 
-Do **not** jump straight into tasks for multi-step work. The plan is the roadmap; individual tasks are the execution units. Create the plan first with `add`, then start tasks one at a time as you reach each step, marking steps done with `step_done`.
+**Workflow:**
+1. **Draft in chat** — Present the plan title, goal, and proposed steps to the user. Do NOT call `update_plan` yet.
+2. **Get approval** — Wait for user confirmation, feedback, or modifications.
+3. **Persist** — Only call `update_plan` action=`add` after the user approves.
+4. **Execute** — Start tasks one at a time as you reach each plan step. Mark steps done with `step_done` as you go.
 
-Plans surface in `read_context` brief mode so any agent can see the bigger picture and know what comes next. Mark the plan `complete` when all steps are done.
+Step-level updates (`step_done`, `step_skip`, `step_add`) and status changes do not need approval — they track execution.
+
+Plans surface in `read_context` brief mode so any agent can see the bigger picture. Mark the plan `complete` when all steps are done.
 
 ### Checkpoints
-Call `kontinue_checkpoint` every ~15 minutes or after any significant step. Write concrete state, not vague summaries.
+Call `checkpoint` every ~15 minutes or after any significant step. Write concrete state, not vague summaries.
 
 **Also call immediately after:**
 - Marking any task done (before starting the next)
@@ -185,13 +191,13 @@ Call `kontinue_checkpoint` every ~15 minutes or after any significant step. Writ
 
 ### Context Hygiene
 Keep context clean so future sessions don't read stale information:
-- **Supersede** outdated decisions → `kontinue_supersede_decision`
-- **Resolve** addressed observations → `kontinue_resolve_observation`
-- **Answer** open questions → `kontinue_answer_question`
-- **Complete** plans → `kontinue_update_plan` action=`status` status=`complete`
+- **Supersede** outdated decisions → `supersede_decision`
+- **Resolve** addressed observations → `resolve_observation`
+- **Answer** open questions → `answer_question`
+- **Complete** plans → `update_plan` action=`status` status=`complete`
 
 ### Handoff
-Call `kontinue_write_handoff` at session end. The summary must answer: What was done? What wasn't? What should happen next?
+Call `write_handoff` at session end. The summary must answer: What was done? What wasn't? What should happen next?
 
 Also call it **proactively** — do not wait for session end:
 - The conversation has had many back-and-forth exchanges
@@ -208,17 +214,19 @@ Also call it **proactively** — do not wait for session end:
 - **Report and stop**: Producing analysis without acting on it. If you find bugs, fix them.
 - **Chat-as-notebook**: Writing long observations into the conversation instead of Kontinue.
 - **Permission-seeking**: Asking "should I do X?" for obvious next steps. Just do it.
-- **Skipping plans for multi-step work**: Starting tasks directly without a plan when the goal has 3+ steps or multiple phases. Create the plan first — do not wait to be told.
+- **Skipping plans for multi-step work**: Starting tasks directly without a plan when the goal has 3+ steps or multiple phases. Draft a plan in chat first.
+- **Persisting plans without approval**: Calling `update_plan` action=`add` before presenting the plan to the user and getting their confirmation.
 - **Waiting for compaction to write a handoff**: Handoffs must be written proactively — when the conversation is long, after a major milestone, or before a large block of work. By the time compaction happens, it is too late.
 - **Amnesia after compaction**: Asking "what were we working on?" instead of reading Kontinue.
 - **Bare tasks**: Adding tasks without descriptions or closing them without outcomes.
 - **Bare decisions**: Logging decisions without rationale, alternatives, or file references.
-- **Skipping session start**: Diving into work without `kontinue_read_context`.
+- **Skipping session start**: Diving into work without `read_context`.
 - **Batching persistence**: Waiting until the end to log observations and decisions. Persist as you go.
 - **Findings in chat only**: Describing a bug, constraint, or audit finding in the conversation without logging it as an observation. Chat is ephemeral; observations persist.
 - **Context pollution**: Never resolving observations or superseding outdated decisions. Clean up as you go — stale context is worse than no context.
-- **Deferring observations**: Thinking “I’ll log this after I finish the task.” Log it NOW via `kontinue_add_observation` — mid-task is the right time.
-- **Skipping inter-task rituals**: Moving directly from one task to the next without calling `kontinue_checkpoint` + `kontinue_check_signals`. These two calls are mandatory between every task transition.
+- **Deferring observations**: Thinking “I’ll log this after I finish the task.” Log it NOW via `add_observation` — mid-task is the right time.
+- **Skipping inter-task rituals**: Moving directly from one task to the next without calling `checkpoint` + `check_signals`. These two calls are mandatory between every task transition.
+- **Spawning subagents without delegation context**: Always call `prepare_delegation` before using the Agent tool to spawn subagents.
 
 ---
 
@@ -230,7 +238,7 @@ Developers can send you real-time signals mid-session via the CLI (`kontinue sig
 > **SIGNAL FROM DEVELOPER** — Read and act on this:
 > [MESSAGE] please prioritize the auth task
 >
-> Call `kontinue_acknowledge_signal` after you have processed this.
+> Call `acknowledge_signal` after you have processed this.
 ```
 
 ### Signal types
@@ -242,12 +250,32 @@ Developers can send you real-time signals mid-session via the CLI (`kontinue sig
 ### When you receive a signal
 1. **Read it immediately** — it represents a real-time instruction from the developer
 2. **Act on it** — reprioritize, answer, or change course as instructed
-3. **Acknowledge it** — call `kontinue_acknowledge_signal` so the developer knows you received it
+3. **Acknowledge it** — call `acknowledge_signal` so the developer knows you received it
 4. If the signal conflicts with your current task, log a decision explaining the trade-off
 
 ### Checking for signals explicitly
-Call `kontinue_check_signals` to explicitly poll for pending signals. Do this:
+Call `check_signals` to explicitly poll for pending signals. Do this:
 - Between tasks (after completing one, before starting the next)
 - When you have been working for more than 15 minutes without any signal injection
 - Whenever the status line shows "N signals pending"
+
+---
+
+## 8. Subagent Coordination
+
+You are the sole interface between subagents and Kontinue. Subagents spawned via the Agent tool do NOT have access to Kontinue MCP tools.
+
+### Before spawning a subagent
+Call `prepare_delegation` with the task description. It returns:
+- Active task context, decisions, and observations
+- Relevant memory search results
+- A compact instruction block to include in the subagent prompt
+
+Include the returned "Subagent Instructions" block in the Agent tool's `prompt` parameter.
+
+### After the subagent returns
+1. Persist key findings via `add_observation` — subagent chat results are lost on compaction
+2. If findings influence a decision, log via `log_decision`
+3. Update task items if applicable via `update_task` action=`item_done`
+4. Never rely on subagent results existing in chat history — they will not survive compaction
 

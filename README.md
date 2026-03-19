@@ -10,7 +10,7 @@ Three things Kontinue changes:
 
 1. **Memory** — decisions, tasks, observations, plans, and handoffs are persisted in SQLite and human-readable markdown. The agent always knows what was done, why, and what comes next.
 2. **Proactiveness** — operating instructions embedded into agent context tell it when to create plans, log decisions, capture findings, and write handoffs — without being asked.
-3. **Seamless agent handoff** — any agent on any tool (Copilot, Claude, Cursor, Windsurf) calls `kontinue_read_context` and instantly recovers the full picture: open tasks, active plans, last handoff, recent decisions, pending questions. No re-briefing. No information loss.
+3. **Seamless agent handoff** — any agent on any tool (Copilot, Claude, Cursor, Windsurf) calls `read_context` and instantly recovers the full picture: open tasks, active plans, last handoff, recent decisions, pending questions. No re-briefing. No information loss.
 
 Works with **GitHub Copilot (VS Code)**, **Claude Code**, **Cursor**, and **Windsurf** via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io).
 
@@ -22,11 +22,11 @@ Kontinue runs as a local MCP server that your AI agent connects to. The agent is
 
 **Every session follows the same contract:**
 
-1. **Start** → agent calls `kontinue_read_context` → recovers last handoff, open tasks, active plans, recent decisions, pending questions, and any developer signals
+1. **Start** → agent calls `read_context` → recovers last handoff, open tasks, active plans, recent decisions, pending questions, and any developer signals
 2. **Work** → agent proactively logs decisions (with rationale), tasks (with outcomes), observations (bugs found, constraints discovered), and plan progress as it goes
-3. **End** → agent calls `kontinue_write_handoff` → writes a precise, actionable summary that any agent can act on immediately
+3. **End** → agent calls `write_handoff` → writes a precise, actionable summary that any agent can act on immediately
 
-**Switch agents at any point.** A new agent — different tool, different model, next day — calls `kontinue_read_context` and resumes exactly where the previous one stopped. No re-briefing, no lost context.
+**Switch agents at any point.** A new agent — different tool, different model, next day — calls `read_context` and resumes exactly where the previous one stopped. No re-briefing, no lost context.
 
 Everything is dual-written: SQLite (queryable, fast) + `.kontinue/*.md` files (human-readable, Obsidian-browsable, git-committable).
 
@@ -106,7 +106,7 @@ kontinue signal --type answer --question "rate limit" "Use per-IP"
 - `abort` _(urgent)_ — stop current work and check for new instructions
 - `answer` — answer an open question the agent logged; also resolves it in memory
 
-The agent calls `kontinue_acknowledge_signal` once it has acted on the signal.
+The agent calls `acknowledge_signal` once it has acted on the signal.
 
 ---
 
@@ -123,7 +123,7 @@ The dashboard shows the real-time task board, active plans, pending signals, act
 
 ## Plans
 
-Plans are multi-step roadmaps that span multiple tasks and context windows. They appear in every `kontinue_read_context` response so any agent (or future session) always knows the larger picture.
+Plans are multi-step roadmaps that span multiple tasks and context windows. They appear in every `read_context` response so any agent (or future session) always knows the larger picture.
 
 ```bash
 kontinue plan add "Implement OAuth" --goal "Full OAuth2 login flow"
@@ -164,7 +164,7 @@ kontinue setup
 This is the core workflow Kontinue enables. Typical scenario:
 
 1. You start a session with **GitHub Copilot** in VS Code — it reads context, works for an hour, checkpoints progress
-2. You switch to **Claude Code** in the terminal — it calls `kontinue_read_context` and gets: last handoff, open tasks, active plans with step status, recent decisions with rationale, and any pending questions
+2. You switch to **Claude Code** in the terminal — it calls `read_context` and gets: last handoff, open tasks, active plans with step status, recent decisions with rationale, and any pending questions
 3. Claude picks up exactly where Copilot stopped — same task, same plan step, same understanding of why decisions were made
 4. Later you open **Cursor** — same story
 
@@ -172,10 +172,10 @@ No copy-pasting context. No re-explaining. No lost progress. The handoff is alwa
 
 ```bash
 # Agent 1 (Copilot) ends its session:
-# → calls kontinue_write_handoff("Finished auth middleware. Next: add refresh token endpoint.")
+# → calls write_handoff("Finished auth middleware. Next: add refresh token endpoint.")
 
 # Agent 2 (Claude Code) starts next day:
-# → calls kontinue_read_context
+# → calls read_context
 # → sees: task "Add refresh token", plan step "auth middleware" marked done,
 #         decision "JWT over sessions" with rationale,
 #         observation "cookie SameSite=Lax on staging"
@@ -186,52 +186,52 @@ No copy-pasting context. No re-explaining. No lost progress. The handoff is alwa
 
 ## MCP Tools (for AI Agents)
 
-The MCP server exposes 17 tools. Agents should call `kontinue_read_context` at the start of every session — the tool descriptions themselves contain the operating instructions.
+The MCP server exposes 17 tools. Agents should call `read_context` at the start of every session — the tool descriptions themselves contain the operating instructions.
 
 ### Core session tools
 | Tool | Purpose |
 |---|---|
-| `kontinue_read_context` | **Always call first.** Returns branch, last handoff, open tasks, active plans, recent decisions, open questions, and pending signals |
-| `kontinue_write_handoff` | End the session with a specific summary + exact next step for the next agent |
-| `kontinue_checkpoint` | Mid-session snapshot — concrete state, files active, next step |
+| `read_context` | **Always call first.** Returns branch, last handoff, open tasks, active plans, recent decisions, open questions, and pending signals |
+| `write_handoff` | End the session with a specific summary + exact next step for the next agent |
+| `checkpoint` | Mid-session snapshot — concrete state, files active, next step |
 
 ### Task management
 | Tool | Purpose |
 |---|---|
-| `kontinue_update_task` | Add / start / done / abandon tasks with `description` (required on add) and `outcome` (required on done) |
+| `update_task` | Add / start / done / abandon tasks with `description` (required on add) and `outcome` (required on done) |
 
 ### Decisions & observations
 | Tool | Purpose |
 |---|---|
-| `kontinue_log_decision` | Record an architectural decision with `rationale`, `alternatives`, `context`, `files`, `tags` |
-| `kontinue_supersede_decision` | Archive an outdated decision and record its replacement |
-| `kontinue_add_observation` | Lightweight mid-task finding — constraint, scope clarification, discovery |
-| `kontinue_resolve_observation` | Mark an observation addressed once the issue is fixed |
+| `log_decision` | Record an architectural decision with `rationale`, `alternatives`, `context`, `files`, `tags` |
+| `supersede_decision` | Archive an outdated decision and record its replacement |
+| `add_observation` | Lightweight mid-task finding — constraint, scope clarification, discovery |
+| `resolve_observation` | Mark an observation addressed once the issue is fixed |
 
 ### Plans
 | Tool | Purpose |
 |---|---|
-| `kontinue_update_plan` | Create plans, mark steps done, change plan status |
+| `update_plan` | Create plans, mark steps done, change plan status |
 
 ### Memory & lookup
 | Tool | Purpose |
 |---|---|
-| `kontinue_search_memory` | Keyword search across all sessions, decisions, notes, and handoffs |
-| `kontinue_read_decision` | Full decision details (rationale, alternatives, context, files) by keyword |
-| `kontinue_read_entity` | Everything known about a named module, file, or concept |
+| `search_memory` | Keyword search across all sessions, decisions, notes, and handoffs |
+| `read_decision` | Full decision details (rationale, alternatives, context, files) by keyword |
+| `read_entity` | Everything known about a named module, file, or concept |
 
 ### Questions
 | Tool | Purpose |
 |---|---|
-| `kontinue_ask_question` | Log a question that needs developer input without blocking work |
-| `kontinue_answer_question` | Resolve an open question |
-| `kontinue_flag_blocker` | Record a hard block that requires external input before proceeding |
+| `ask_question` | Log a question that needs developer input without blocking work |
+| `answer_question` | Resolve an open question |
+| `flag_blocker` | Record a hard block that requires external input before proceeding |
 
 ### Signals
 | Tool | Purpose |
 |---|---|
-| `kontinue_check_signals` | Explicitly poll for pending developer signals |
-| `kontinue_acknowledge_signal` | Confirm the agent has read and acted on signal(s) |
+| `check_signals` | Explicitly poll for pending developer signals |
+| `acknowledge_signal` | Confirm the agent has read and acted on signal(s) |
 
 ---
 

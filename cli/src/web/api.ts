@@ -20,6 +20,8 @@ import {
   findOpenQuestion,
   getOpenObservations,
   getTaskItemsByProject,
+  getStaleInProgressTasks,
+  getSessionToolCalls,
 } from '../store/queries.js'
 import { getBranch, getCommit } from '../utils/git.js'
 import { getDb } from '../store/db.js'
@@ -99,6 +101,8 @@ export function buildApiData(project: Project, cwd: string) {
   const pendingSigs = getUnacknowledgedSignals(project.id)
   const activity    = buildActivityFeed(project.id, 30)
   const observations = getOpenObservations(project.id, 20)
+  const staleTasks   = getStaleInProgressTasks(project.id, 2)
+  const toolCalls    = active ? getSessionToolCalls(active.id) : 0
 
   // Attach task items grouped by task_id
   const allItems    = getTaskItemsByProject(project.id)
@@ -117,6 +121,24 @@ export function buildApiData(project: Project, cwd: string) {
     ? Math.round((Date.now() - new Date(lastCp.created_at).getTime()) / 60_000)
     : null
 
+  // Health score (mirrors computeHealthFromData in server.ts)
+  const ipCount = open.filter(t => t.status === 'in-progress').length
+  let healthScore = 0
+  const healthReasons: string[] = []
+  if (!lastCp) { healthScore += 3; healthReasons.push('no checkpoint') }
+  else if (cpAgeMin! > 30) { healthScore += 3; healthReasons.push(`checkpoint ${cpAgeMin}m stale`) }
+  else if (cpAgeMin! > 15) { healthScore += 1; healthReasons.push(`checkpoint ${cpAgeMin}m ago`) }
+  if (active && !active.context_read_at) { healthScore += 2; healthReasons.push('context not read') }
+  if (ipCount > 1) { healthScore += 1; healthReasons.push(`${ipCount} tasks in-progress`) }
+  const oldQs = questions.filter(q => (Date.now() - new Date(q.created_at).getTime()) > 86_400_000)
+  if (oldQs.length > 0) { healthScore += 1; healthReasons.push(`${oldQs.length} question${oldQs.length > 1 ? 's' : ''} >1d old`) }
+  if (active) {
+    const sessionMins = Math.round((Date.now() - new Date(active.started_at).getTime()) / 60_000)
+    if (sessionMins > 120) { healthScore += 2; healthReasons.push(`session ${Math.floor(sessionMins / 60)}h old`) }
+  }
+  if (staleTasks.length > 0) { healthScore += 2; healthReasons.push(`${staleTasks.length} stale task${staleTasks.length > 1 ? 's' : ''}`) }
+  const healthLevel = healthScore === 0 ? 'good' : healthScore <= 2 ? 'fair' : 'poor'
+
   return {
     project: {
       id: project.id,
@@ -131,6 +153,7 @@ export function buildApiData(project: Project, cwd: string) {
           branch: active.branch,
           context_read_at: active.context_read_at,
           ageMin: Math.round((Date.now() - new Date(active.started_at).getTime()) / 60_000),
+          toolCalls,
         }
       : null,
     lastHandoff: last
@@ -152,6 +175,8 @@ export function buildApiData(project: Project, cwd: string) {
     observations,
     signals: { recent: signals, pending: pendingSigs },
     activity,
+    health: { level: healthLevel, reasons: healthReasons },
+    staleTasks: staleTasks.map(t => ({ id: t.id, title: t.title, updated_at: t.updated_at })),
     stats: { chunks: chunkCount },
     generatedAt: new Date().toISOString(),
   }

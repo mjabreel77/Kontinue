@@ -21,6 +21,7 @@ export interface Session {
   end_commit: string | null
   context_read_at: string | null
   files_touched: string | null
+  tool_calls: number
 }
 
 export interface Task {
@@ -50,6 +51,7 @@ export interface Decision {
   tags: string | null
   confidence: 'confirmed' | 'provisional' | 'revisit'
   status: 'active' | 'superseded' | 'archived'
+  scope: 'project' | 'task'
   superseded_by: number | null
   created_at: string
   branch: string | null
