@@ -47,7 +47,9 @@ If there are in-progress tasks from a previous session, **resume them** unless t
 
 ### During a session
 - **Checkpoint every 15 minutes** or after any significant step via `kontinue_checkpoint`
+- **After completing any task:** call `kontinue_checkpoint` immediately, then `kontinue_check_signals` — do this before starting the next task, every time
 - **Persist as you go** — don't batch observations or decisions for later
+- **Log observations immediately** when you discover something — not after finishing the task, not at the end of the session: right now
 - One task `in_progress` at a time. Complete it before starting the next.
 - **Self-monitor for context length.** If the conversation is long (many exchanges, large files read, many tool calls), call `kontinue_write_handoff` proactively — do not wait for compaction to happen.
 
@@ -108,9 +110,15 @@ When the user gives you a task:
 - **Start** the task before beginning work
 - **Do the work** — write code, fix bugs, run tests, make the changes
 - **Checkpoint** after each meaningful step
-- **Log decisions** when you choose between alternatives
-- **Log observations** when you discover something that affects the work
+- **Log decisions immediately** when you choose between alternatives — do not defer
+- **Log observations immediately** when you discover something that affects the work — mid-task, mid-file, whenever it happens
 - **Do not stop at analysis** — analysis is a means, not an end
+
+### Inter-task Ritual (do this every time a task is marked done)
+1. `kontinue_update_task` action=`done` with outcome
+2. `kontinue_checkpoint` — record what was accomplished
+3. `kontinue_check_signals` — check for developer signals before starting something new
+4. Then and only then: start the next task
 
 ### Step 4: Report Outcome
 - **Mark the task done** with a concrete outcome
@@ -170,6 +178,11 @@ Plans surface in `read_context` brief mode so any agent can see the bigger pictu
 ### Checkpoints
 Call `kontinue_checkpoint` every ~15 minutes or after any significant step. Write concrete state, not vague summaries.
 
+**Also call immediately after:**
+- Marking any task done (before starting the next)
+- Completing any file edit or code change that took non-trivial reasoning
+- Any step you would not want to redo if the session ended right now
+
 ### Context Hygiene
 Keep context clean so future sessions don't read stale information:
 - **Supersede** outdated decisions → `kontinue_supersede_decision`
@@ -179,6 +192,14 @@ Keep context clean so future sessions don't read stale information:
 
 ### Handoff
 Call `kontinue_write_handoff` at session end. The summary must answer: What was done? What wasn't? What should happen next?
+
+Also call it **proactively** — do not wait for session end:
+- The conversation has had many back-and-forth exchanges
+- You just completed a major task or milestone
+- You are about to read many large files or make many tool calls
+- You feel uncertain whether there will be room to finish the current task
+
+**A handoff written before compaction is infinitely more useful than one that never gets written.**
 
 ---
 
@@ -196,3 +217,5 @@ Call `kontinue_write_handoff` at session end. The summary must answer: What was 
 - **Batching persistence**: Waiting until the end to log observations and decisions. Persist as you go.
 - **Findings in chat only**: Describing a bug, constraint, or audit finding in the conversation without logging it as an observation. Chat is ephemeral; observations persist.
 - **Context pollution**: Never resolving observations or superseding outdated decisions. Clean up as you go — stale context is worse than no context.
+- **Deferring observations**: Thinking “I’ll log this after I finish the task.” Log it NOW via `kontinue_add_observation` — mid-task is the right time.
+- **Skipping inter-task rituals**: Moving directly from one task to the next without calling `kontinue_checkpoint` + `kontinue_check_signals`. These two calls are mandatory between every task transition.

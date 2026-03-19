@@ -162,7 +162,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const cpWarn = (() => {
         if (!lastCp) return '\n> ⚠️ **No checkpoint recorded yet.** Call `kontinue_checkpoint` after meaningful progress so this session can be resumed if context is lost.'
         const minsAgo = Math.round((Date.now() - new Date(lastCp.created_at).getTime()) / 60_000)
-        if (minsAgo > 30) return `\n> ⚠️ **Last checkpoint ${minsAgo}m ago.** Call \`kontinue_checkpoint\` now — if this session ends, ${minsAgo} minutes of work has no recovery record.`
+        if (minsAgo > 15) return `\n> ⚠️ **Last checkpoint ${minsAgo}m ago.** Call \`kontinue_checkpoint\` now — if this session ends, ${minsAgo} minutes of work has no recovery record.`
         return ''
       })()
 
@@ -278,6 +278,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
         '- "start"   — Mark a task in-progress when you begin actively working on it.',
         '- "done"    — Mark a task completed immediately after finishing it.',
         '             Outcome: describe what was done, what files were changed, what approach was taken.',
+        '             ALWAYS follow with: kontinue_checkpoint, then kontinue_check_signals.',
         '- "abandon" — Mark a task dropped. Always pair with kontinue_log_decision to record why.',
         '',
         'Title matching for start/done/abandon is fuzzy — a partial match is sufficient.',
@@ -325,8 +326,11 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const descWarn = (action === 'add' && !description)
         ? '\n\n> **REMINDER:** No `description` provided. Add one — it is required for handoffs to be self-contained. What does "done" look like for this task?'
         : ''
+      const doneNudge = action === 'done'
+        ? '\n\n> **NEXT:** Call `kontinue_checkpoint` now to record this milestone. Then call `kontinue_check_signals` and log any decisions or observations made during this task before starting the next one.'
+        : ''
 
-      return { content: [{ type: 'text' as const, text: `Task "${title}" — ${action} ✓${warn}${descWarn}${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Task "${title}" — ${action} ✓${warn}${descWarn}${doneNudge}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
@@ -461,7 +465,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
         ? '\n\n> **WARNING:** This handoff summary is very short. Name the specific files changed, functions added/fixed, and the exact next action. A vague handoff means the next agent starts blind.'
         : ''
 
-      return { content: [{ type: 'text' as const, text: `Handoff saved → .kontinue/sessions/${thinWarn}` }] }
+      return { content: [{ type: 'text' as const, text: `Handoff saved → .kontinue/sessions/${thinWarn}${signalCheck(project.id)}` }] }
     }
   )
 
@@ -504,7 +508,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
       writeNote(cwd, content)
       upsertChunk(project.id, 'note', note.id, content)
 
-      return { content: [{ type: 'text' as const, text: `Observation recorded.${signalCheck(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Observation recorded.${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
@@ -534,7 +538,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const note = addNote(project.id, `BLOCKER: ${blocker}`, getActiveSession(project.id)?.id)
       writeNote(cwd, `BLOCKER: ${blocker}`)
       upsertChunk(project.id, 'note', note.id, `Blocker: ${blocker}`)
-      return { content: [{ type: 'text' as const, text: `Blocker noted: "${blocker}"${signalCheck(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Blocker noted: "${blocker}"${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
@@ -571,15 +575,17 @@ export async function startMcpServer(cwd: string): Promise<void> {
             return all.slice(0, limit)
           })()
 
+      const warn = contextWarning(project.id)
+
       if (chunks.length === 0) {
-        return { content: [{ type: 'text' as const, text: 'No memory indexed yet. Start a session and log some decisions.' }] }
+        return { content: [{ type: 'text' as const, text: `No memory indexed yet. Start a session and log some decisions.${warn}` }] }
       }
 
       const text = chunks
         .map(c => `### [${c.source_type}]\n${c.content}`)
         .join('\n\n---\n\n')
 
-      return { content: [{ type: 'text' as const, text }] }
+      return { content: [{ type: 'text' as const, text: `${text}${warn}` }] }
     }
   )
 
@@ -620,8 +626,10 @@ export async function startMcpServer(cwd: string): Promise<void> {
         )
         .slice(0, limit)
 
+      const warn = contextWarning(project.id)
+
       if (matches.length === 0) {
-        return { content: [{ type: 'text' as const, text: `No decisions found matching "${keyword}".` }] }
+        return { content: [{ type: 'text' as const, text: `No decisions found matching "${keyword}".${warn}` }] }
       }
 
       const text = matches.map(d => [
@@ -636,7 +644,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
         d.files ? `\n**Files:** ${d.files}` : '',
       ].filter(l => l !== null).join('\n')).join('\n\n---\n\n')
 
-      return { content: [{ type: 'text' as const, text }] }
+      return { content: [{ type: 'text' as const, text: `${text}${warn}` }] }
     }
   )
 
@@ -734,10 +742,11 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const chunks = getAllChunks(project.id)
       const k = keyword.toLowerCase()
       const matches = chunks.filter(c => c.content.toLowerCase().includes(k)).slice(0, 3)
+      const warn = contextWarning(project.id)
       const text = matches.length
         ? matches.map(c => `[${c.source_type}]\n${c.content}`).join('\n\n---\n\n')
         : `No entity found matching "${keyword}".`
-      return { content: [{ type: 'text' as const, text }] }
+      return { content: [{ type: 'text' as const, text: `${text}${warn}` }] }
     }
   )
 
@@ -753,6 +762,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
         'If this conversation ends unexpectedly, the next session reads this and resumes exactly here.',
         '',
         'When to call it:',
+        '- IMMEDIATELY after marking any task done (before starting the next task)',
         '- After completing a meaningful step (e.g. "finished schema migration")',
         '- Before starting something risky (e.g. "about to refactor auth middleware")',
         '- Whenever you would write a git commit message',
@@ -814,7 +824,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const session = getActiveSession(project.id)
       const linkedTask = task_title ? findTaskByTitle(project.id, task_title) : null
       addQuestion(project.id, question, session?.id ?? null, linkedTask?.id ?? null)
-      return { content: [{ type: 'text' as const, text: `Question recorded: "${question}"\n\nIt will surface in every read_context until answered via kontinue_answer_question.${signalCheck(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Question recorded: "${question}"\n\nIt will surface in every read_context until answered via kontinue_answer_question.${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
@@ -834,7 +844,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const q = findOpenQuestion(project.id, question)
       if (!q) return { content: [{ type: 'text' as const, text: `No open question found matching: "${question}"` }] }
       answerQuestion(q.id, answer)
-      return { content: [{ type: 'text' as const, text: `Question resolved ✓\nQ: ${q.question}\nA: ${answer}${signalCheck(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Question resolved ✓\nQ: ${q.question}\nA: ${answer}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
