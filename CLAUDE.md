@@ -196,6 +196,14 @@ Keep context clean so future sessions don't read stale information:
 - **Answer** open questions → `answer_question`
 - **Complete** plans → `update_plan` action=`status` status=`complete`
 
+### Workflow Chains
+These are mandatory sequences. When you hit a trigger, follow the chain:
+
+1. **Edit a module** → `read_entity(module)` FIRST → read/edit code → `add_observation` if you discover something new
+2. **Make a choice** → implement it → `log_decision` IMMEDIATELY after (not later, not at task end)
+3. **Task done** → `update_task` action=`done` → reflect (decisions? discoveries?) → `check_signals` → next task
+4. **Spawn subagent** → `prepare_delegation` (optional, for code-editing subagents) → run subagent → `process_subagent_result` with full response (MANDATORY)
+
 ### Handoff
 Call `write_handoff` at session end. The summary must answer: What was done? What wasn't? What should happen next?
 
@@ -226,7 +234,9 @@ Also call it **proactively** — do not wait for session end:
 - **Context pollution**: Never resolving observations or superseding outdated decisions. Clean up as you go — stale context is worse than no context.
 - **Deferring observations**: Thinking “I’ll log this after I finish the task.” Log it NOW via `add_observation` — mid-task is the right time.
 - **Skipping inter-task rituals**: Moving directly from one task to the next without calling `checkpoint` + `check_signals`. These two calls are mandatory between every task transition.
-- **Spawning subagents without delegation context**: Always call `prepare_delegation` before using the Agent tool to spawn subagents.
+- **Manually persisting subagent results**: After a subagent returns, call `process_subagent_result` — do not manually extract and persist findings.
+- **Skipping workflow chains**: Editing a module without calling `read_entity` first, or making a choice without calling `log_decision` after.
+- **Findings in chat only**: Describing a bug, constraint, or audit finding in the conversation without calling `add_observation`. Chat is ephemeral; observations persist.
 
 ---
 
@@ -263,19 +273,19 @@ Call `check_signals` to explicitly poll for pending signals. Do this:
 
 ## 8. Subagent Coordination
 
-You are the sole interface between subagents and Kontinue. Subagents spawned via the Agent tool do NOT have access to Kontinue MCP tools.
+Subagents spawned via the Agent tool have LIMITED access to Kontinue MCP tools.
+They CAN use: `add_observation`, `search_memory`, `read_entity` (read + observe).
+They CANNOT use: `update_task`, `update_plan`, `write_handoff`, `checkpoint`, `log_decision` (structural mutations stay with you).
 
 ### Before spawning a subagent
-Call `prepare_delegation` with the task description. It returns:
-- Active task context, decisions, and observations
-- Relevant memory search results
-- A compact instruction block to include in the subagent prompt
-
+Call `prepare_delegation` with the task description. It returns context and a subagent instruction block.
 Include the returned "Subagent Instructions" block in the Agent tool's `prompt` parameter.
 
 ### After the subagent returns
-1. Persist key findings via `add_observation` — subagent chat results are lost on compaction
-2. If findings influence a decision, log via `log_decision`
-3. Update task items if applicable via `update_task` action=`item_done`
-4. Never rely on subagent results existing in chat history — they will not survive compaction
+Call `process_subagent_result` with the subagent's full response text.
+It auto-extracts decisions, findings, and recommendations and persists them.
+Observations the subagent already persisted via `add_observation` are NOT duplicated.
+
+Do NOT manually persist subagent results \u2014 the tool handles it.
+Do NOT rely on subagent results existing in chat history \u2014 they will not survive compaction.
 

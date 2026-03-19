@@ -472,7 +472,14 @@ export async function startMcpServer(cwd: string): Promise<void> {
         ? '\n\n> **REMINDER:** No `description` provided. Add one — it is required for handoffs to be self-contained. What does "done" look like for this task?'
         : ''
       const doneNudge = action === 'done'
-        ? '\n\n> Task done + auto-checkpoint created. **NEXT:** Call `check_signals` now, then start the next task.'
+        ? [
+            '\n\n> Task done + auto-checkpoint created.',
+            '> **Reflect before moving on:**',
+            '> - Did you make any choices between alternatives? → call `log_decision`',
+            '> - Did you discover anything surprising about the code? → call `add_observation`',
+            '> - Were any earlier decisions invalidated? → call `supersede_decision`',
+            '> **NEXT:** Call `check_signals`, then start the next task.',
+          ].join('\n')
         : ''
 
       return { content: [{ type: 'text' as const, text: `Task #${resolvedTask.id} "${resolvedTask.title}" — ${action} ✓${warn}${descWarn}${doneNudge}${signalCheck(project.id)}${statusLine(project.id)}` }] }
@@ -698,16 +705,16 @@ export async function startMcpServer(cwd: string): Promise<void> {
     'search_memory',
     {
       description: [
-        "Search the project's persistent memory by keyword.",
+        'Search project memory BEFORE modifying code you have not worked with in this session.',
         '',
-        'Use this when you need to recall context before modifying a module or API:',
-        '- Decisions logged across sessions',
-        '- Handoff notes from previous sessions',
-        '- Observations and blockers recorded during prior work',
+        'Workflow chain: search_memory → read file → edit → add_observation/log_decision',
         '',
-        'Pass a keyword to search (e.g. "auth", "migration", "rate limit").',
-        'If no keyword is provided, returns the most recent chunks.',
-        'Use the optional type filter to narrow to a specific category.',
+        'Use this to recall:',
+        '- Decisions logged across sessions that constrain how code should be written',
+        '- Observations and known issues recorded during prior work',
+        '- Handoff notes describing what was done and what comes next',
+        '',
+        'Pass a keyword (e.g. "auth", "migration", "rate limit"). If no keyword, returns most recent chunks.',
       ].join('\n'),
       inputSchema: {
         keyword: z.string().optional().describe('Search keyword — matches against memory chunk content. If omitted, returns most recent chunks.'),
@@ -885,14 +892,12 @@ export async function startMcpServer(cwd: string): Promise<void> {
     'read_entity',
     {
       description: [
-        'Look up everything Kontinue knows about a specific named concept — a file, module, API, data model, service, or pattern.',
+        'BEFORE editing any file or module, call this first to check what Kontinue knows about it.',
         '',
-        'Use this before modifying or extending a part of the codebase that may have been documented in memory:',
-        '- Before editing a module: find past notes, known issues, or design constraints',
-        '- Before implementing an API: check if design decisions were already logged',
-        '- When the developer references something by name: get context before acting',
+        'Workflow chain: read_entity → read/edit file → add_observation (if you discover something new)',
         '',
-        'Returns up to 3 matching memory chunks. Each includes its source type (decision, note, session, architecture) so you know the origin and weight of the information.',
+        'This prevents re-introducing bugs, violating established conventions, or contradicting prior decisions.',
+        'Returns up to 3 matching memory chunks — decisions, observations, and session notes linked to the keyword.',
       ].join('\n'),
       inputSchema: {
         keyword: z.string().describe('Name or keyword identifying the entity — e.g. a filename, module name, API path, or concept like "auth middleware" or "token refresh"'),
@@ -1180,17 +1185,14 @@ export async function startMcpServer(cwd: string): Promise<void> {
     'prepare_delegation',
     {
       description: [
-        'Prepare a delegation brief before spawning a subagent via the Agent tool.',
+        'Optional: enrich a subagent prompt with Kontinue context before spawning it.',
         '',
-        'Call this BEFORE using the Agent tool. It searches Kontinue memory for relevant context',
-        'and returns a structured brief you can include in the subagent prompt.',
+        'Call this when the subagent task involves code that has prior decisions or observations in memory.',
+        'It searches memory for relevant context and returns a brief to include in the prompt.',
         '',
-        'The brief includes: active task context, relevant decisions and observations,',
-        'memory search results, and a compact instruction block for the subagent.',
+        'Not required for simple exploration subagents. Always recommended for subagents that will edit code.',
         '',
-        'Protocol: Always call this before spawning subagents. After the subagent returns,',
-        'persist key findings via add_observation and log_decision. Never rely on subagent',
-        'chat results — they are lost on compaction.',
+        'After any subagent returns, you MUST call `process_subagent_result` — that step is mandatory.',
       ].join('\n'),
       inputSchema: {
         task: z.string().describe('What the subagent will do — used to search relevant memory'),
@@ -1299,12 +1301,10 @@ export async function startMcpServer(cwd: string): Promise<void> {
 
       // ── Instructions for parent agent ──
       lines.push('')
-      lines.push('### Instructions for Parent Agent')
-      lines.push('After the subagent returns:')
-      lines.push('1. Persist key findings via `add_observation`')
-      lines.push('2. If findings influence a decision, log via `log_decision`')
-      lines.push('3. Update task items if applicable via `update_task` action=`item_done`')
-      lines.push('4. Do NOT rely on subagent results in chat — they will be lost on compaction')
+      lines.push('### After the Subagent Returns')
+      lines.push('Call `process_subagent_result` with the subagent\'s full response text.')
+      lines.push('It auto-extracts decisions, findings, and recommendations and persists them.')
+      lines.push('Observations the subagent persisted via `add_observation` are NOT duplicated.')
 
       // ── Subagent instructions block (include in prompt) ──
       lines.push('')
@@ -1317,6 +1317,82 @@ export async function startMcpServer(cwd: string): Promise<void> {
 
       const text = lines.join('\n')
       return { content: [{ type: 'text' as const, text: `${text}${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}` }] }
+    }
+  )
+
+  // ── process_subagent_result ──────────────────────────────────────
+
+  server.registerTool(
+    'process_subagent_result',
+    {
+      description: [
+        'You MUST call this after EVERY subagent returns — no exceptions.',
+        '',
+        'Pass the subagent\'s full response text. This tool:',
+        '1. Extracts **Decisions** and persists each as a task-scoped decision',
+        '2. Extracts **Findings** and **Recommendations** as observations',
+        '3. Links everything to the current in-progress task',
+        '',
+        'Without this call, subagent work is lost on compaction. One call replaces all manual persistence.',
+      ].join('\n'),
+      inputSchema: {
+        result: z.string().describe('The full text response returned by the subagent'),
+        task_title: z.string().optional().describe('Partial title of the task this subagent work belongs to'),
+      },
+    },
+    async ({ result, task_title }) => {
+      const project = getProject(cwd)
+      trackToolCall(project.id)
+      const session = getActiveSession(project.id)
+      const linkedTask = task_title ? findTaskByTitle(project.id, task_title) : null
+
+      const persisted: string[] = []
+
+      // Extract sections using markdown headers
+      const sectionPattern = /\*\*(\w+)\*\*\s*[—–-]\s*([\s\S]*?)(?=\*\*\w+\*\*\s*[—–-]|$)/g
+      let match: RegExpExecArray | null
+      while ((match = sectionPattern.exec(result)) !== null) {
+        const sectionName = match[1].toLowerCase()
+        const sectionContent = match[2].trim()
+        if (!sectionContent) continue
+
+        if (sectionName === 'decisions') {
+          // Each line starting with - is a decision
+          const items = sectionContent.split('\n').filter(l => l.trim().startsWith('-'))
+          for (const item of items) {
+            const text = item.replace(/^-\s*/, '').trim()
+            if (text.length < 10) continue
+            addDecision(project.id, text, undefined, undefined, session?.id, getBranch(cwd), getCommit(cwd), 'Via subagent', undefined, undefined, linkedTask?.id, 'task')
+            persisted.push(`decision: ${text.slice(0, 60)}`)
+          }
+          // If no bullet items, persist whole block as one decision
+          if (items.length === 0 && sectionContent.length > 10) {
+            const summary = sectionContent.split('\n')[0].slice(0, 120)
+            addDecision(project.id, summary, sectionContent, undefined, session?.id, getBranch(cwd), getCommit(cwd), 'Via subagent', undefined, undefined, linkedTask?.id, 'task')
+            persisted.push(`decision: ${summary.slice(0, 60)}`)
+          }
+        } else if (sectionName === 'findings' || sectionName === 'recommendations') {
+          const content = `Subagent ${sectionName}: ${sectionContent.slice(0, 500)}`
+          const note = addNote(project.id, content, session?.id, linkedTask?.id)
+          upsertChunk(project.id, 'note', note.id, content)
+          persisted.push(`${sectionName}: ${sectionContent.slice(0, 60)}`)
+        }
+        // Skip 'observations' — subagent should have already persisted these via add_observation
+      }
+
+      // If nothing was extracted, persist the whole result as an observation
+      if (persisted.length === 0 && result.trim().length > 20) {
+        const content = `Subagent result: ${result.slice(0, 500)}`
+        const note = addNote(project.id, content, session?.id, linkedTask?.id)
+        upsertChunk(project.id, 'note', note.id, content)
+        persisted.push('observation: full result persisted')
+      }
+
+      const summary = persisted.length > 0
+        ? `Processed subagent result — persisted ${persisted.length} item(s):\n${persisted.map(p => `- ${p}`).join('\n')}`
+        : 'Subagent returned empty or unparseable result — nothing persisted.'
+
+      return { content: [{ type: 'text' as const, text: `${summary}${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 

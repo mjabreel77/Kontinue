@@ -356,7 +356,7 @@ You are the sole interface between subagents and Kontinue. Subagents do NOT have
 - **Findings in chat only**: Describing findings in chat without logging as an observation
 - **Deferring observations**: Thinking "I'll log this after I finish." Log it NOW.
 - **Skipping inter-task rituals**: Moving to the next task without checkpoint + check_signals
-- **Spawning subagents without delegation context**: Always call \`prepare_delegation\` first
+- **Losing subagent results**: After a subagent returns, call \`process_subagent_result\` with the full response
 `
 }
 
@@ -367,19 +367,29 @@ You are the sole interface between subagents and Kontinue. Subagents do NOT have
  */
 export const SUBAGENT_INSTRUCTIONS = `## Instructions for This Subagent
 
-You are a subagent working on behalf of a parent agent that uses the Kontinue memory system. You do NOT have access to Kontinue tools directly.
+You are a subagent working on behalf of a parent agent. You have LIMITED access to Kontinue memory tools.
+
+### Tools You CAN Use
+- **add_observation** — call this when you discover something important (bug, constraint, quirk, undocumented behavior). Do not defer — persist immediately.
+- **search_memory** — search project memory before modifying code you haven't seen before.
+- **read_entity** — look up what's known about a module/file/concept before changing it.
+
+### Tools You MUST NOT Use
+Do NOT call: update_task, update_plan, write_handoff, checkpoint, log_decision, supersede_decision, check_signals, acknowledge_signal, prepare_delegation.
+These are controlled by the parent agent.
 
 ### How to Work
 1. Focus on the task described above. Be thorough and specific.
-2. When you discover something important (a bug, constraint, design pattern, gotcha), note it explicitly.
-3. When you make a choice between alternatives, explain your reasoning.
+2. Call search_memory or read_entity BEFORE modifying any module — check for prior decisions or known issues.
+3. When you discover something unexpected, call add_observation IMMEDIATELY — do not wait until the end.
+4. When you make a choice between alternatives, explain your reasoning clearly in your response (the parent will persist it as a decision).
 
 ### How to Return Results
 Structure your final response with these sections as applicable:
 
 **Findings** — what you discovered, specific file paths and line numbers
-**Decisions** — choices you made and why (so the parent can persist them)
-**Observations** — anything surprising, important constraints, or gotchas
+**Decisions** — choices you made and why (the parent will call log_decision)
+**Observations** — anything surprising or important (already persisted if you called add_observation)
 **Recommendations** — suggested next steps or follow-up work
 
 Be specific: name files, functions, line numbers. Vague summaries are not useful.`

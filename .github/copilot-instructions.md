@@ -196,6 +196,14 @@ Keep context clean so future sessions don't read stale information:
 - **Answer** open questions → `answer_question`
 - **Complete** plans → `update_plan` action=`status` status=`complete`
 
+### Workflow Chains
+These are mandatory sequences. When you hit a trigger, follow the chain:
+
+1. **Edit a module** → `read_entity(module)` FIRST → read/edit code → `add_observation` if you discover something new
+2. **Make a choice** → implement it → `log_decision` IMMEDIATELY after (not later, not at task end)
+3. **Task done** → `update_task` action=`done` → reflect (decisions? discoveries?) → `check_signals` → next task
+4. **Spawn subagent** → `prepare_delegation` (optional, for code-editing subagents) → run subagent → `process_subagent_result` with full response (MANDATORY)
+
 ### Handoff
 Call `write_handoff` at session end. The summary must answer: What was done? What wasn't? What should happen next?
 
@@ -226,3 +234,6 @@ Also call it **proactively** — do not wait for session end:
 - **Context pollution**: Never resolving observations or superseding outdated decisions. Clean up as you go — stale context is worse than no context.
 - **Deferring observations**: Thinking “I’ll log this after I finish the task.” Log it NOW via `add_observation` — mid-task is the right time.
 - **Skipping inter-task rituals**: Moving directly from one task to the next without calling `checkpoint` + `check_signals`. These two calls are mandatory between every task transition.
+- **Skipping workflow chains**: Editing a module without calling `read_entity` first, or making a choice without calling `log_decision` after.
+- **Findings in chat only**: Describing a bug, constraint, or audit finding in the conversation without calling `add_observation`. Chat is ephemeral; observations persist.
+- **Losing subagent results**: After a subagent returns, you MUST call `process_subagent_result` with the full response. Without it, subagent work is lost on compaction.
