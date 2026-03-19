@@ -117,7 +117,18 @@ kontinue web           # starts on http://localhost:3131 by default
 kontinue web --port 8080
 ```
 
-The dashboard shows the real-time task board, active plans, pending signals, activity feed, and a signal bar for sending messages to the agent. Auto-refreshes every 10 seconds.
+A real-time dashboard built with a shadcn/ui-inspired design system (Inter font, zinc palette, CSS variables, `color-mix()` theming). Features:
+
+- **Kanban task board** — Todo / In Progress / Done columns with card count badges, stale task indicators, and a fullscreen mode for focused triage
+- **Task detail modal** — click any card to see the full description, outcome, timestamps, and linked items
+- **Top-7 + Show more** — columns show the 7 most recent tasks by default with a toggle to expand
+- **Signal bar** — send messages, priorities, or abort signals to the active agent directly from the browser
+- **Signal history** — filterable log of all signals with type, status, and source filters
+- **Activity feed** — pending signals highlighted, session replay, checkpoint timeline
+- **Session replay** — step through past session checkpoints and decisions
+- **Dark mode** — toggle between light and dark themes with full variable-driven theming
+- **Live refresh** — auto-updates via Server-Sent Events every 2 seconds
+- **+ Add Task** — create tasks directly from the dashboard toolbar
 
 ---
 

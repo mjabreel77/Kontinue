@@ -192,7 +192,7 @@ export function getAllOpenTasks(projectId: number): Task[] {
 }
 
 export function getStaleInProgressTasks(projectId: number, thresholdHours = 2): Task[] {
-  const cutoff = new Date(Date.now() - thresholdHours * 3_600_000).toISOString()
+  const cutoff = new Date(Date.now() - thresholdHours * 3_600_000).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '')
   return getDb().prepare(
     "SELECT * FROM tasks WHERE project_id = ? AND status = 'in-progress' AND updated_at < ? ORDER BY updated_at ASC"
   ).all(projectId, cutoff) as unknown as Task[]
