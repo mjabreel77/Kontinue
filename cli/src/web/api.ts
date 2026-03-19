@@ -22,11 +22,19 @@ import {
   getTaskItemsByProject,
   getStaleInProgressTasks,
   getSessionToolCalls,
+  getBlockers,
+  getBlockedBy,
+  getAllDependencies,
 } from '../store/queries.js'
 import { getBranch, getCommit } from '../utils/git.js'
 import { getDb } from '../store/db.js'
 import { rewriteTaskList } from '../store/markdown.js'
 import type { Project } from '../types.js'
+
+/** Parse SQLite datetime('now') strings as UTC — they lack a Z suffix. */
+function parseUtc(dateStr: string): number {
+  return new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z').getTime()
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -118,7 +126,7 @@ export function buildApiData(project: Project, cwd: string) {
   }))
 
   const cpAgeMin = lastCp
-    ? Math.round((Date.now() - new Date(lastCp.created_at).getTime()) / 60_000)
+    ? Math.round((Date.now() - parseUtc(lastCp.created_at)) / 60_000)
     : null
 
   // Health score (mirrors computeHealthFromData in server.ts)
@@ -130,10 +138,10 @@ export function buildApiData(project: Project, cwd: string) {
   else if (cpAgeMin! > 15) { healthScore += 1; healthReasons.push(`checkpoint ${cpAgeMin}m ago`) }
   if (active && !active.context_read_at) { healthScore += 2; healthReasons.push('context not read') }
   if (ipCount > 1) { healthScore += 1; healthReasons.push(`${ipCount} tasks in-progress`) }
-  const oldQs = questions.filter(q => (Date.now() - new Date(q.created_at).getTime()) > 86_400_000)
+  const oldQs = questions.filter(q => (Date.now() - parseUtc(q.created_at)) > 86_400_000)
   if (oldQs.length > 0) { healthScore += 1; healthReasons.push(`${oldQs.length} question${oldQs.length > 1 ? 's' : ''} >1d old`) }
   if (active) {
-    const sessionMins = Math.round((Date.now() - new Date(active.started_at).getTime()) / 60_000)
+    const sessionMins = Math.round((Date.now() - parseUtc(active.started_at)) / 60_000)
     if (sessionMins > 120) { healthScore += 2; healthReasons.push(`session ${Math.floor(sessionMins / 60)}h old`) }
   }
   if (staleTasks.length > 0) { healthScore += 2; healthReasons.push(`${staleTasks.length} stale task${staleTasks.length > 1 ? 's' : ''}`) }
@@ -152,7 +160,7 @@ export function buildApiData(project: Project, cwd: string) {
           started_at: active.started_at,
           branch: active.branch,
           context_read_at: active.context_read_at,
-          ageMin: Math.round((Date.now() - new Date(active.started_at).getTime()) / 60_000),
+          ageMin: Math.round((Date.now() - parseUtc(active.started_at)) / 60_000),
           toolCalls,
         }
       : null,
@@ -164,8 +172,8 @@ export function buildApiData(project: Project, cwd: string) {
         }
       : null,
     tasks: {
-      inProgress: open.filter(t => t.status === 'in-progress').map(t => ({ ...t, items: itemsByTask[t.id] ?? [] })),
-      todo: open.filter(t => t.status === 'todo').map(t => ({ ...t, items: itemsByTask[t.id] ?? [] })),
+      inProgress: open.filter(t => t.status === 'in-progress').map(t => ({ ...t, items: itemsByTask[t.id] ?? [], blockers: getBlockers(t.id).map(b => ({ id: b.id, title: b.title, status: b.status })), blocking: getBlockedBy(t.id).map(b => ({ id: b.id, title: b.title, status: b.status })) })),
+      todo: open.filter(t => t.status === 'todo').map(t => ({ ...t, items: itemsByTask[t.id] ?? [], blockers: getBlockers(t.id).map(b => ({ id: b.id, title: b.title, status: b.status })), blocking: getBlockedBy(t.id).map(b => ({ id: b.id, title: b.title, status: b.status })) })),
       done: done.map(t => ({ ...t, items: itemsByTask[t.id] ?? [] })),
     },
     decisions,

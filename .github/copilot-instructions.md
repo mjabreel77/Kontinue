@@ -30,6 +30,32 @@ Do not ask for permission to do obvious next steps. If an audit reveals a securi
 - **Display**: summaries, outcomes, questions for the user → chat
 - **Never**: dump raw analysis into chat as the primary deliverable
 
+### Every user message triggers at least one Kontinue tool call
+This is non-negotiable. When the user sends a message — any message — you MUST call at least one Kontinue tool before or alongside your response. Zero-tool replies are a failure mode.
+
+Analyze each message for:
+- **Intent**: Is this a new task, a follow-up, feedback, a question, a course correction, or a status check?
+- **Complexity**: Single action, multi-step work, or just context?
+- **Scope**: Does it affect an existing task, create a new one, or change the plan?
+- **State**: Does it surface a decision, an observation, or a blocker?
+
+Then choose the appropriate tool(s):
+
+| Message type | Minimum tool call |
+|---|---|
+| New task / feature request | `update_task` action=add |
+| "Do X next" / prioritization | `update_task` action=start (or add+start) |
+| Follow-up on current work | `checkpoint` (persist progress so far) |
+| Course correction / "actually do Y" | `add_observation` + update task or plan |
+| Bug report / discovery | `add_observation` |
+| "Why did you..." / design question | `log_decision` (if a choice was made) |
+| Approval / "ok" / "go ahead" | `checkpoint` or `update_plan` |
+| Status check / "where are we" | `read_context` |
+| End of session / "that's all" | `write_handoff` |
+| Ambiguous / conversational | `check_signals` (at minimum — keeps the session alive) |
+
+The point: **if the conversation were lost right now, Kontinue must already have the user's latest intent recorded.** A reply without a tool call is a reply that could be lost.
+
 ---
 
 ## 2. Session Lifecycle
@@ -236,4 +262,5 @@ Also call it **proactively** — do not wait for session end:
 - **Skipping inter-task rituals**: Moving directly from one task to the next without calling `checkpoint` + `check_signals`. These two calls are mandatory between every task transition.
 - **Skipping workflow chains**: Editing a module without calling `read_entity` first, or making a choice without calling `log_decision` after.
 - **Findings in chat only**: Describing a bug, constraint, or audit finding in the conversation without calling `add_observation`. Chat is ephemeral; observations persist.
+- **Zero-tool replies**: Responding to a user message without calling any Kontinue tool. Every message must trigger at least one tool call — even if it's just `check_signals` or `checkpoint`. A reply without a tool call is a reply that could be lost on compaction.
 - **Losing subagent results**: After a subagent returns, you MUST call `process_subagent_result` with the full response. Without it, subagent work is lost on compaction.

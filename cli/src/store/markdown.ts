@@ -218,6 +218,8 @@ You have access to a persistent memory system via the **Kontinue MCP tools**. Th
 
 4. **Persist everything that matters, display only what's needed.** Observations, decisions, progress → Kontinue. Summaries and outcomes → chat.
 
+5. **Every user message triggers at least one Kontinue tool call.** Analyze each message for intent (new task? follow-up? course correction? status check?) and call the appropriate tool. If nothing else fits, call \`check_signals\`. A reply without a tool call is a reply that could be lost on compaction.
+
 ---
 
 ## Session Lifecycle
@@ -356,6 +358,7 @@ You are the sole interface between subagents and Kontinue. Subagents do NOT have
 - **Findings in chat only**: Describing findings in chat without logging as an observation
 - **Deferring observations**: Thinking "I'll log this after I finish." Log it NOW.
 - **Skipping inter-task rituals**: Moving to the next task without checkpoint + check_signals
+- **Zero-tool replies**: Responding to a user message without calling any Kontinue tool. Every message must trigger at least one tool call — even if it's just \`check_signals\` or \`checkpoint\`.
 - **Losing subagent results**: After a subagent returns, call \`process_subagent_result\` with the full response
 `
 }
@@ -432,6 +435,8 @@ When the user gives you a goal:
 ## 4. Persist, Don't Display
 
 Chat is a communication gate, not a notebook. Persist everything that matters into Kontinue tools. Only display summaries and outcomes to the user.
+
+**Every user message MUST trigger at least one Kontinue tool call.** Analyze intent (new task? follow-up? bug report? approval?) and call the matching tool. If nothing else applies, call \`check_signals\` as the minimum.
 
 ## 5. Write a Handoff Early
 

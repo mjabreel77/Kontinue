@@ -343,6 +343,104 @@ export function deleteTaskItem(itemId: number): void {
   getDb().prepare('DELETE FROM task_items WHERE id = ?').run(itemId)
 }
 
+// -- Task Dependencies --------------------------------------------------------
+
+export interface TaskDependency {
+  id: number
+  blocker_task_id: number
+  blocked_task_id: number
+  created_at: string
+}
+
+/** Declare that blockerTaskId must be completed before blockedTaskId can start. */
+export function addDependency(blockerTaskId: number, blockedTaskId: number): TaskDependency {
+  const db = getDb()
+  const info = db.prepare(
+    'INSERT OR IGNORE INTO task_dependencies (blocker_task_id, blocked_task_id) VALUES (?, ?)'
+  ).run(blockerTaskId, blockedTaskId)
+  return db.prepare('SELECT * FROM task_dependencies WHERE blocker_task_id = ? AND blocked_task_id = ?').get(blockerTaskId, blockedTaskId) as unknown as TaskDependency
+}
+
+/** Remove a dependency relationship. */
+export function removeDependency(blockerTaskId: number, blockedTaskId: number): void {
+  getDb().prepare('DELETE FROM task_dependencies WHERE blocker_task_id = ? AND blocked_task_id = ?').run(blockerTaskId, blockedTaskId)
+}
+
+/** Get tasks that block the given task (must be done before this task can proceed). */
+export function getBlockers(taskId: number): Task[] {
+  return getDb().prepare(
+    `SELECT t.* FROM tasks t
+     JOIN task_dependencies d ON d.blocker_task_id = t.id
+     WHERE d.blocked_task_id = ?`
+  ).all(taskId) as unknown as Task[]
+}
+
+/** Get tasks that are blocked by the given task (waiting for this task to finish). */
+export function getBlockedBy(taskId: number): Task[] {
+  return getDb().prepare(
+    `SELECT t.* FROM tasks t
+     JOIN task_dependencies d ON d.blocked_task_id = t.id
+     WHERE d.blocker_task_id = ?`
+  ).all(taskId) as unknown as Task[]
+}
+
+/** Get all unresolved blockers for a task (blockers that are not yet done/abandoned). */
+export function getUnresolvedBlockers(taskId: number): Task[] {
+  return getDb().prepare(
+    `SELECT t.* FROM tasks t
+     JOIN task_dependencies d ON d.blocker_task_id = t.id
+     WHERE d.blocked_task_id = ? AND t.status NOT IN ('done', 'abandoned')`
+  ).all(taskId) as unknown as Task[]
+}
+
+/** Get all dependency pairs for a project (for dashboard display). */
+export function getAllDependencies(projectId: number): TaskDependency[] {
+  return getDb().prepare(
+    `SELECT d.* FROM task_dependencies d
+     JOIN tasks t1 ON t1.id = d.blocker_task_id
+     JOIN tasks t2 ON t2.id = d.blocked_task_id
+     WHERE t1.project_id = ? AND t2.project_id = ?`
+  ).all(projectId, projectId) as unknown as TaskDependency[]
+}
+
+// -- Task Templates -----------------------------------------------------------
+
+export interface TaskTemplate {
+  id: number
+  project_id: number
+  name: string
+  description: string | null
+  default_items: string | null  // JSON array of strings
+  created_at: string
+}
+
+/** Create or replace a task template. */
+export function createTemplate(projectId: number, name: string, description?: string | null, defaultItems?: string[]): TaskTemplate {
+  const db = getDb()
+  const itemsJson = defaultItems && defaultItems.length > 0 ? JSON.stringify(defaultItems) : null
+  db.prepare(
+    'INSERT OR REPLACE INTO task_templates (project_id, name, description, default_items) VALUES (?, ?, ?, ?)'
+  ).run(projectId, name, description ?? null, itemsJson)
+  return db.prepare('SELECT * FROM task_templates WHERE project_id = ? AND name = ?').get(projectId, name) as unknown as TaskTemplate
+}
+
+/** List all templates for a project. */
+export function getTemplates(projectId: number): TaskTemplate[] {
+  return getDb().prepare('SELECT * FROM task_templates WHERE project_id = ? ORDER BY name').all(projectId) as unknown as TaskTemplate[]
+}
+
+/** Find a template by partial name match. */
+export function findTemplateByName(projectId: number, name: string): TaskTemplate | undefined {
+  const lower = name.toLowerCase()
+  const templates = getTemplates(projectId)
+  return templates.find(t => t.name.toLowerCase().includes(lower))
+}
+
+/** Delete a template by id. */
+export function deleteTemplate(templateId: number): void {
+  getDb().prepare('DELETE FROM task_templates WHERE id = ?').run(templateId)
+}
+
 // -- Memory chunks ------------------------------------------------------------
 
 export function upsertChunk(
@@ -620,7 +718,7 @@ export function getSessionActivity(projectId: number, sessionId: number, session
     'SELECT COUNT(*) as n FROM checkpoints WHERE session_id = ?'
   ).get(sessionId) as { n: number }
 
-  const durationMinutes = Math.round((Date.now() - new Date(since).getTime()) / 60_000)
+  const durationMinutes = Math.round((Date.now() - new Date(since.endsWith('Z') ? since : since + 'Z').getTime()) / 60_000)
 
   return {
     durationMinutes,

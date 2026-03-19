@@ -170,10 +170,30 @@ function migrate(db: DatabaseSync): void {
       acknowledged_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS task_dependencies (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      blocker_task_id  INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      blocked_task_id  INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      created_at       TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(blocker_task_id, blocked_task_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS task_templates (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      name          TEXT NOT NULL,
+      description   TEXT,
+      default_items TEXT,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(project_id, name)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_checkpoints_proj    ON checkpoints(project_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(session_id);
     CREATE INDEX IF NOT EXISTS idx_questions_proj      ON questions(project_id, resolved_at);
     CREATE INDEX IF NOT EXISTS idx_signals_pending     ON signals(project_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_task_deps_blocker   ON task_dependencies(blocker_task_id);
+    CREATE INDEX IF NOT EXISTS idx_task_deps_blocked   ON task_dependencies(blocked_task_id);
   `)
 
   // Additive migrations: add new columns to existing tables when upgrading.

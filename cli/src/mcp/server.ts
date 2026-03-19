@@ -68,10 +68,25 @@ import {
   STALE_AFTER_DAYS,
   getSessionChunksForCompression,
   deleteChunksByIds,
+  addDependency,
+  removeDependency,
+  getBlockers,
+  getBlockedBy,
+  getUnresolvedBlockers,
+  getAllDependencies,
+  createTemplate,
+  getTemplates,
+  findTemplateByName,
+  deleteTemplate,
 } from '../store/queries.js'
 import { writeDecision, writeNote, writeSession, rewriteTaskList, writePlan, deletePlanFile, SUBAGENT_INSTRUCTIONS } from '../store/markdown.js'
 import { getBranch, getCommit, getRecentLog, getDiffFiles } from '../utils/git.js'
 import { shareDecision, searchGlobalPatterns, getAllGlobalPatterns } from '../store/global-db.js'
+
+/** Parse SQLite datetime('now') strings as UTC — they lack a Z suffix. */
+function parseUtc(dateStr: string): number {
+  return new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z').getTime()
+}
 
 function getProject(cwd: string) {
   const project = findProjectByPath(cwd)
@@ -106,14 +121,14 @@ export async function startMcpServer(cwd: string): Promise<void> {
     const stale   = getStaleInProgressTasks(projectId, 2)
 
     const cpAge = cp
-      ? `${Math.round((Date.now() - new Date(cp.created_at).getTime()) / 60_000)}m ago`
+      ? `${Math.round((Date.now() - parseUtc(cp.created_at)) / 60_000)}m ago`
       : 'none'
 
     const health = computeHealthFromData(cp, session, ip, qs, stale.length)
 
     const toolCalls = session ? getSessionToolCalls(session.id) : 0
     const sessionMinutes = session
-      ? Math.round((Date.now() - new Date(session.started_at).getTime()) / 60_000)
+      ? Math.round((Date.now() - parseUtc(session.started_at)) / 60_000)
       : 0
 
     const staleMemory = getStaleChunkCount(projectId)
@@ -145,7 +160,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
     if (!cp) {
       return '\n> **CHECKPOINT NEEDED:** No checkpoint exists this session. Call `checkpoint` now to create a recovery point.'
     }
-    const minsAgo = Math.round((Date.now() - new Date(cp.created_at).getTime()) / 60_000)
+    const minsAgo = Math.round((Date.now() - parseUtc(cp.created_at)) / 60_000)
     if (minsAgo > 15) {
       return `\n> **CHECKPOINT NEEDED (${minsAgo}m stale):** Call \`checkpoint\` now — ${minsAgo} minutes of work has no recovery record.`
     }
@@ -164,7 +179,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
 
     if (!cp) { score += 3; reasons.push('no checkpoint') }
     else {
-      const cpMins = Math.round((Date.now() - new Date(cp.created_at).getTime()) / 60_000)
+      const cpMins = Math.round((Date.now() - parseUtc(cp.created_at)) / 60_000)
       if (cpMins > 30) { score += 3; reasons.push(`checkpoint ${cpMins}m stale`) }
       else if (cpMins > 15) { score += 1; reasons.push(`checkpoint ${cpMins}m ago`) }
     }
@@ -172,11 +187,11 @@ export async function startMcpServer(cwd: string): Promise<void> {
     if (session && !session.context_read_at) { score += 2; reasons.push('context not read') }
     if (ipCount > 1) { score += 1; reasons.push(`${ipCount} tasks in-progress`) }
 
-    const oldQs = qs.filter(q => (Date.now() - new Date(q.created_at).getTime()) > 86_400_000)
+    const oldQs = qs.filter(q => (Date.now() - parseUtc(q.created_at)) > 86_400_000)
     if (oldQs.length > 0) { score += 1; reasons.push(`${oldQs.length} question${oldQs.length > 1 ? 's' : ''} >1d old`) }
 
     if (session) {
-      const sessionMins = Math.round((Date.now() - new Date(session.started_at).getTime()) / 60_000)
+      const sessionMins = Math.round((Date.now() - parseUtc(session.started_at)) / 60_000)
       if (sessionMins > 120) { score += 2; reasons.push(`session ${Math.floor(sessionMins / 60)}h old`) }
     }
 
@@ -219,6 +234,8 @@ export async function startMcpServer(cwd: string): Promise<void> {
       description: [
         'REQUIRED FIRST ACTION — call this before reading any files or writing any code. Auto-starts your session.',
         '',
+        'MANDATORY for: session start, status checks ("where are we?"), after compaction, after any gap in conversation.',
+        '',
         'Two modes:',
         '- "brief" (default) — ~350 tokens. Last handoff + in-progress tasks + open questions + checkpoint warning + last commit diff. Use this for most sessions.',
         '- "full"            — Complete picture: all todo tasks, recent decisions, active plans, git log. Use when starting fresh or after a long break.',
@@ -256,7 +273,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
       // Checkpoint staleness warning
       const cpWarn = (() => {
         if (!lastCp) return '\n> ⚠️ **No checkpoint recorded yet.** Call `checkpoint` after meaningful progress so this session can be resumed if context is lost.'
-        const minsAgo = Math.round((Date.now() - new Date(lastCp.created_at).getTime()) / 60_000)
+        const minsAgo = Math.round((Date.now() - parseUtc(lastCp.created_at)) / 60_000)
         if (minsAgo > 15) return `\n> ⚠️ **Last checkpoint ${minsAgo}m ago.** Call \`checkpoint\` now — if this session ends, ${minsAgo} minutes of work has no recovery record.`
         return ''
       })()
@@ -293,6 +310,14 @@ export async function startMcpServer(cwd: string): Promise<void> {
             `- ◉ **#${t.id} ${t.title}**${itemProgress}${t.branch ? ` _(${t.branch})_` : ''}`,
             t.description ? `  > ${t.description}` : '',
             ...taskItems.map(i => `  ${i.done ? '✓' : '○'} #${i.id} ${i.content}`),
+            ...(() => {
+              const blockers = getUnresolvedBlockers(t.id)
+              return blockers.length > 0 ? [`  ⛔ Blocked by: ${blockers.map(b => `#${b.id} ${b.title}`).join(', ')}`] : []
+            })(),
+            ...(() => {
+              const blocking = getBlockedBy(t.id)
+              return blocking.length > 0 ? [`  🔒 Blocks: ${blocking.map(b => `#${b.id} ${b.title}`).join(', ')}`] : []
+            })(),
           ].filter(Boolean).join('\n')
         }),
         inProgress.length === 0 ? '_none_' : '',
@@ -317,7 +342,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
         lines.push('', '## Stale Tasks')
         lines.push('> These tasks have been in-progress for >2h without update. Consider completing, abandoning, or checkpointing them.')
         for (const t of staleTasks) {
-          const hoursStale = Math.round((Date.now() - new Date(t.updated_at).getTime()) / 3_600_000)
+          const hoursStale = Math.round((Date.now() - parseUtc(t.updated_at)) / 3_600_000)
           lines.push(`- **#${t.id} ${t.title}** _(${hoursStale}h since last update)_`)
         }
       }
@@ -326,7 +351,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
       if (openQs.length > 0) {
         lines.push('', '## Open Questions')
         for (const q of openQs.slice(0, mode === 'brief' ? 3 : openQs.length)) {
-          const age = Math.round((Date.now() - new Date(q.created_at).getTime()) / 86_400_000)
+          const age = Math.round((Date.now() - parseUtc(q.created_at)) / 86_400_000)
           lines.push(`- ❓ ${q.question}${age > 0 ? ` _(${age}d open)_` : ''}`)
         }
       }
@@ -354,7 +379,9 @@ export async function startMcpServer(cwd: string): Promise<void> {
         if (todo.length > 0) {
           lines.push('', '## Todo')
           for (const t of todo) {
-            lines.push(`- ○ **#${t.id} ${t.title}**${t.description ? `\n  > ${t.description}` : ''}`)
+            const blockers = getUnresolvedBlockers(t.id)
+            const blockerTag = blockers.length > 0 ? ` ⛔ _blocked by ${blockers.map(b => `#${b.id}`).join(', ')}_` : ''
+            lines.push(`- ○ **#${t.id} ${t.title}**${blockerTag}${t.description ? `\n  > ${t.description}` : ''}`)
           }
         }
 
@@ -395,7 +422,10 @@ export async function startMcpServer(cwd: string): Promise<void> {
       description: [
         'Create, start, complete, or abandon tasks. Manage task checklist items. Call this whenever you begin or finish a unit of work.',
         '',
-        'Task actions:',
+        'MANDATORY for: new task/feature requests from user (action="add"), prioritization requests (action="start").',
+        'Every user message that implies new work MUST trigger at least update_task action="add".',
+        '',
+        'Task actions:', 
         '- "add"     — Create a new task. Title: short imperative. Description: acceptance criteria. Include description ALWAYS.',
         '- "start"   — Mark a task in-progress.',
         '- "done"    — Mark a task completed. Provide outcome describing what was done.',
@@ -407,6 +437,16 @@ export async function startMcpServer(cwd: string): Promise<void> {
         '- "item_undo"   — Uncheck a previously completed item.',
         '- "item_remove" — Remove a checklist item entirely.',
         '',
+        'Dependency actions (declare task ordering):',
+        '- "block"   — Declare that this task blocks another task. Pass the blocked task\'s partial title in "blocked_by".',
+        '- "unblock" — Remove a blocking relationship. Pass the other task\'s partial title in "blocked_by".',
+        '',
+        'Template actions (reusable task skeletons):',
+        '- "save_template" — Save a task as a reusable template. Pass the task\'s partial title + a template name via "template" param.',
+        '- "from_template" — Create a new task from a template. Pass the template name via "template" param. Optionally override the title.',
+        '- "list_templates" — List all saved templates for the current project.',
+        '- "delete_template" — Delete a template by name. Pass the name via "template" param.',
+        '',
         'Title matching for all actions except "add" is fuzzy — a partial match is sufficient.',
         'For item actions, use the "items" parameter for the item content (fuzzy match for done/undo/remove, comma-separated for item_add).',
         '',
@@ -415,17 +455,87 @@ export async function startMcpServer(cwd: string): Promise<void> {
         'Protocol: Before "start", ensure read_context was called. After "done", a checkpoint is auto-created — proceed to check_signals.',
       ].join('\n'),
       inputSchema: {
-        action:      z.enum(['add', 'start', 'done', 'abandon', 'item_add', 'item_done', 'item_undo', 'item_remove']).describe('Task lifecycle or item management action'),
+        action:      z.enum(['add', 'start', 'done', 'abandon', 'item_add', 'item_done', 'item_undo', 'item_remove', 'block', 'unblock', 'save_template', 'from_template', 'list_templates', 'delete_template']).describe('Task lifecycle, item management, dependency, or template action'),
         title:       z.string().describe('Full task title for "add", or a partial match string for other actions'),
         description: z.string().optional().describe('For "add": what needs to be done and what done looks like (acceptance criteria). Be specific.'),
         items:       z.string().optional().describe('For "add"/"item_add": comma-separated checklist items. For "item_done"/"item_undo"/"item_remove": partial match of the item content.'),
         outcome:     z.string().optional().describe('For "done": what was actually done, what approach was taken, which files were changed.'),
+        blocked_by:  z.string().optional().describe('For "block"/"unblock": partial title of the other task in the dependency relationship.'),
+        template:    z.string().optional().describe('For "save_template"/"from_template"/"delete_template": the template name.'),
       },
     },
-    async ({ action, title, description, items, outcome }) => {
+    async ({ action, title, description, items, outcome, blocked_by, template }) => {
       const project = getProject(cwd)
       trackToolCall(project.id)
       const session = getActiveSession(project.id)
+
+      // Template actions
+      if (action === 'list_templates') {
+        const templates = getTemplates(project.id)
+        if (templates.length === 0) return { content: [{ type: 'text' as const, text: `No templates saved yet. Use action="save_template" on an existing task to create one.${signalCheck(project.id)}${statusLine(project.id)}` }] }
+        const list = templates.map(t => {
+          const itemList = t.default_items ? JSON.parse(t.default_items) as string[] : []
+          return `- **${t.name}**${t.description ? `: ${t.description.slice(0, 80)}` : ''}${itemList.length > 0 ? ` [${itemList.length} items]` : ''}`
+        }).join('\n')
+        return { content: [{ type: 'text' as const, text: `Templates (${templates.length}):\n${list}${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      }
+
+      if (action === 'delete_template') {
+        if (!template) return { content: [{ type: 'text' as const, text: `Provide the template name via the "template" parameter.` }] }
+        const found = findTemplateByName(project.id, template)
+        if (!found) return { content: [{ type: 'text' as const, text: `No template found matching: "${template}"` }] }
+        deleteTemplate(found.id)
+        return { content: [{ type: 'text' as const, text: `Template "${found.name}" deleted.${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      }
+
+      if (action === 'save_template') {
+        if (!template) return { content: [{ type: 'text' as const, text: `Provide a template name via the "template" parameter.` }] }
+        const task = findTaskByTitle(project.id, title)
+        if (!task) return { content: [{ type: 'text' as const, text: `No open task found matching: "${title}"` }] }
+        const taskItems = getTaskItems(task.id)
+        const itemContents = taskItems.map(i => i.content)
+        createTemplate(project.id, template, task.description ?? description ?? null, itemContents.length > 0 ? itemContents : undefined)
+        return { content: [{ type: 'text' as const, text: `Template "${template}" saved from task #${task.id} "${task.title}"${itemContents.length > 0 ? ` with ${itemContents.length} checklist items` : ''}.${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      }
+
+      if (action === 'from_template') {
+        if (!template) return { content: [{ type: 'text' as const, text: `Provide a template name via the "template" parameter.` }] }
+        const found = findTemplateByName(project.id, template)
+        if (!found) return { content: [{ type: 'text' as const, text: `No template found matching: "${template}". Use action="list_templates" to see available templates.` }] }
+        const taskTitle = title || found.name
+        const taskDesc = description || found.description || undefined
+        const task = addTask(project.id, taskTitle, session?.id, getBranch(cwd), taskDesc)
+        if (taskDesc) upsertChunk(project.id, 'task', task.id, `Task: ${taskTitle}\n${taskDesc}`)
+        const templateItems = found.default_items ? JSON.parse(found.default_items) as string[] : []
+        if (templateItems.length > 0) addTaskItems(task.id, templateItems)
+        // Also add any extra items from the items param
+        if (items) {
+          const extraItems = items.split(',').map(s => s.trim()).filter(Boolean)
+          if (extraItems.length > 0) addTaskItems(task.id, extraItems)
+        }
+        const allItems = getTaskItems(task.id)
+        const open = getAllOpenTasks(project.id)
+        rewriteTaskList(cwd, open.filter(t => t.status === 'in-progress'), open.filter(t => t.status === 'todo'), getTasksByStatus(project.id, 'done'))
+        return { content: [{ type: 'text' as const, text: `Task #${task.id} "${taskTitle}" created from template "${found.name}"${allItems.length > 0 ? ` with ${allItems.length} checklist items` : ''}.${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      }
+
+      // Dependency actions
+      if (action === 'block' || action === 'unblock') {
+        const task = findTaskByTitle(project.id, title)
+        if (!task) return { content: [{ type: 'text' as const, text: `No open task found matching: "${title}"` }] }
+        if (!blocked_by) return { content: [{ type: 'text' as const, text: `Provide the other task's partial title via the "blocked_by" parameter.` }] }
+        const otherTask = findTaskByTitle(project.id, blocked_by)
+        if (!otherTask) return { content: [{ type: 'text' as const, text: `No open task found matching: "${blocked_by}"` }] }
+        if (task.id === otherTask.id) return { content: [{ type: 'text' as const, text: `A task cannot block itself.` }] }
+
+        if (action === 'block') {
+          addDependency(task.id, otherTask.id)
+          return { content: [{ type: 'text' as const, text: `#${task.id} "${task.title}" now blocks #${otherTask.id} "${otherTask.title}"${signalCheck(project.id)}${statusLine(project.id)}` }] }
+        } else {
+          removeDependency(task.id, otherTask.id)
+          return { content: [{ type: 'text' as const, text: `Dependency removed: #${task.id} "${task.title}" no longer blocks #${otherTask.id} "${otherTask.title}"${signalCheck(project.id)}${statusLine(project.id)}` }] }
+        }
+      }
 
       if (action === 'item_done' || action === 'item_undo' || action === 'item_remove') {
         const task = findTaskByTitle(project.id, title)
@@ -479,6 +589,15 @@ export async function startMcpServer(cwd: string): Promise<void> {
         resolvedTask = task
       }
 
+      // Warn if starting a task with unresolved blockers
+      const blockerWarn = action === 'start'
+        ? (() => {
+            const blockers = getUnresolvedBlockers(resolvedTask.id)
+            if (blockers.length === 0) return ''
+            return `\n\n> ⚠️ **BLOCKED:** This task is waiting on: ${blockers.map(b => `#${b.id} "${b.title}"`).join(', ')}. Consider completing blockers first or removing the dependency with action="unblock".`
+          })()
+        : ''
+
       // Auto-checkpoint on task done — eliminates the most-ignored nudge
       if (action === 'done') {
         const autoProgress = `Task completed: ${resolvedTask.title}${outcome ? `. Outcome: ${outcome}` : ''}`
@@ -514,7 +633,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
           ].join('\n')
         : ''
 
-      return { content: [{ type: 'text' as const, text: `Task #${resolvedTask.id} "${resolvedTask.title}" — ${action} ✓${warn}${descWarn}${doneNudge}${signalCheck(project.id)}${statusLine(project.id)}` }] }
+      return { content: [{ type: 'text' as const, text: `Task #${resolvedTask.id} "${resolvedTask.title}" — ${action} ✓${warn}${descWarn}${blockerWarn}${doneNudge}${signalCheck(project.id)}${statusLine(project.id)}` }] }
     }
   )
 
@@ -706,6 +825,9 @@ export async function startMcpServer(cwd: string): Promise<void> {
         '- You find a potential issue you are not fixing right now but should be tracked',
         '- You notice something that would affect a different task or future work',
         '',
+        'MANDATORY for: user bug reports, user course corrections ("actually do Y instead"), any discovery or finding.',
+        'If the user tells you something about the project, persist it here — chat is ephemeral.',
+        '',
         'Rule: if you are about to mention a finding in chat, call this FIRST. Chat is ephemeral; observations persist.',
         'Always include task_title and files so observations link to the right context.',
       ].join('\n'),
@@ -811,7 +933,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
 
       const text = chunks
         .map(c => {
-          const age = c.created_at ? Date.now() - new Date(c.created_at).getTime() : 0
+          const age = c.created_at ? Date.now() - parseUtc(c.created_at) : 0
           const staleTag = (age > staleThresholdMs && !(c as { decay_exempt?: number }).decay_exempt) ? ' ⚠️ STALE' : ''
           return `### [${c.source_type}${staleTag}]\n${c.content}`
         })
@@ -1007,6 +1129,9 @@ export async function startMcpServer(cwd: string): Promise<void> {
     {
       description: [
         'Save a mid-task progress snapshot. Call this every 10–15 minutes during active work, and after any significant step.',
+        '',
+        'MANDATORY for: follow-up messages on current work, user approval/"ok"/"go ahead" messages.',
+        'When the user sends a follow-up and no other tool fits, checkpoint persists the current state.',
         '',
         'This is NOT a session handoff — the session stays open. It is a recovery point.',
         'If this conversation ends unexpectedly, the next session reads this and resumes exactly here.',
@@ -1206,6 +1331,10 @@ export async function startMcpServer(cwd: string): Promise<void> {
     {
       description: [
         'Check for pending developer signals (messages, priority changes, answers to your questions).',
+        '',
+        'FALLBACK MINIMUM: If the user sends any message and no other Kontinue tool applies, call this.',
+        'Every user message MUST trigger at least one Kontinue tool call — check_signals is the minimum.',
+        'A reply without any tool call is a reply that could be lost on compaction.',
         '',
         'Developers can send you signals mid-session via the CLI (`kontinue signal`) or web dashboard.',
         'Signals are also automatically injected into other tool responses, but call this explicitly',
@@ -1518,7 +1647,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const cp    = getLastCheckpoint(project.id)
       const qs    = getOpenQuestions(project.id)
       const cpLine = cp
-        ? `${Math.round((Date.now() - new Date(cp.created_at).getTime()) / 60_000)}m ago — ${cp.progress}${cp.next_step ? ` → ${cp.next_step}` : ''}`
+        ? `${Math.round((Date.now() - parseUtc(cp.created_at)) / 60_000)}m ago — ${cp.progress}${cp.next_step ? ` → ${cp.next_step}` : ''}`
         : '_none_'
       const lines = [
         `# Kontinue Context — ${project.name}`,

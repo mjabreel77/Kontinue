@@ -538,7 +538,9 @@ function esc(s) {
 
 function fmtAge(isoDate) {
   if (!isoDate) return ''
-  const mins = Math.round((Date.now() - new Date(isoDate).getTime()) / 60000)
+  // SQLite datetime('now') stores UTC without Z suffix — append it so JS parses as UTC
+  const dateStr = isoDate.endsWith('Z') ? isoDate : isoDate + 'Z'
+  const mins = Math.round((Date.now() - new Date(dateStr).getTime()) / 60000)
   if (mins < 1) return 'just now'
   if (mins < 60) return mins + 'm ago'
   const h = Math.floor(mins / 60), m = mins % 60
@@ -787,10 +789,24 @@ function renderTask(t, staleIds) {
     </div>\`
   }
 
+  let depsHtml = ''
+  const blockers = t.blockers || []
+  const blocking = t.blocking || []
+  if (blockers.length > 0) {
+    const unresolvedBlockers = blockers.filter(b => b.status !== 'done' && b.status !== 'abandoned')
+    if (unresolvedBlockers.length > 0) {
+      depsHtml += \`<div style="font-size:11px;color:var(--red);margin-top:4px">⛔ Blocked by: \${unresolvedBlockers.map(b => '#' + b.id).join(', ')}</div>\`
+    }
+  }
+  if (blocking.length > 0) {
+    depsHtml += \`<div style="font-size:11px;color:var(--yellow);margin-top:2px">🔒 Blocks: \${blocking.map(b => '#' + b.id).join(', ')}</div>\`
+  }
+
   return \`<div class="task-card\${isStale ? ' stale' : ''}">
     <div class="task-title"><span style="color:var(--muted);font-weight:400">#\${t.id}</span> \${esc(t.title)}\${staleTag}</div>
     \${desc}
     <div class="task-meta">\${age}\${branch}</div>
+    \${depsHtml}
     \${itemsHtml}
   </div>\`
 }
