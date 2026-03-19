@@ -1,0 +1,100 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --color-background: hsl(40 33% 97%);
+  --color-foreground: hsl(222 47% 11%);
+  --color-card: hsl(0 0% 100%);
+  --color-card-foreground: hsl(222 47% 11%);
+  --color-popover: hsl(0 0% 100%);
+  --color-popover-foreground: hsl(222 47% 11%);
+  --color-primary: hsl(222 47% 25%);
+  --color-primary-foreground: hsl(38 40% 95%);
+  --color-secondary: hsl(38 30% 93%);
+  --color-secondary-foreground: hsl(222 47% 20%);
+  --color-muted: hsl(38 20% 93%);
+  --color-muted-foreground: hsl(222 10% 46%);
+  --color-accent: hsl(38 30% 93%);
+  --color-accent-foreground: hsl(222 47% 20%);
+  --color-destructive: hsl(0 84.2% 60.2%);
+  --color-destructive-foreground: hsl(0 0% 98%);
+  --color-border: hsl(38 20% 87%);
+  --color-input: hsl(38 20% 87%);
+  --color-ring: hsl(222 47% 25%);
+  --color-chart-1: hsl(222 47% 45%);
+  --color-chart-2: hsl(173 58% 39%);
+  --color-chart-3: hsl(38 60% 55%);
+  --color-chart-4: hsl(43 74% 66%);
+  --color-chart-5: hsl(0 65% 55%);
+  --color-sidebar: hsl(222 47% 15%);
+  --color-sidebar-foreground: hsl(38 30% 95%);
+  --color-sidebar-primary: hsl(38 45% 90%);
+  --color-sidebar-primary-foreground: hsl(222 47% 15%);
+  --color-sidebar-accent: hsl(222 35% 25%);
+  --color-sidebar-accent-foreground: hsl(0 0% 100%);
+  --color-sidebar-border: hsl(222 30% 25%);
+  --color-sidebar-ring: hsl(222 50% 55%);
+  --radius: 0.625rem;
+}
+
+.dark {
+  --color-background: hsl(222 40% 10%);
+  --color-foreground: hsl(38 30% 92%);
+  --color-card: hsl(222 35% 13%);
+  --color-card-foreground: hsl(38 30% 92%);
+  --color-popover: hsl(222 35% 13%);
+  --color-popover-foreground: hsl(38 30% 92%);
+  --color-primary: hsl(38 40% 85%);
+  --color-primary-foreground: hsl(222 47% 12%);
+  --color-secondary: hsl(222 30% 18%);
+  --color-secondary-foreground: hsl(38 30% 90%);
+  --color-muted: hsl(222 30% 18%);
+  --color-muted-foreground: hsl(222 15% 60%);
+  --color-accent: hsl(222 30% 18%);
+  --color-accent-foreground: hsl(38 30% 90%);
+  --color-destructive: hsl(0 62.8% 30.6%);
+  --color-destructive-foreground: hsl(0 0% 98%);
+  --color-border: hsl(222 25% 20%);
+  --color-input: hsl(222 25% 20%);
+  --color-ring: hsl(38 40% 75%);
+  --color-chart-1: hsl(222 60% 60%);
+  --color-chart-2: hsl(160 60% 45%);
+  --color-chart-3: hsl(38 70% 60%);
+  --color-chart-4: hsl(280 65% 60%);
+  --color-chart-5: hsl(340 75% 55%);
+  --color-sidebar: hsl(222 40% 12%);
+  --color-sidebar-foreground: hsl(38 30% 95%);
+  --color-sidebar-primary: hsl(38 45% 88%);
+  --color-sidebar-primary-foreground: hsl(222 47% 10%);
+  --color-sidebar-accent: hsl(222 30% 20%);
+  --color-sidebar-accent-foreground: hsl(0 0% 100%);
+  --color-sidebar-border: hsl(222 25% 18%);
+  --color-sidebar-ring: hsl(222 50% 55%);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Force SVG icons to inline-block so they don't break flex row layout */
+  svg {
+    display: inline-block;
+    vertical-align: middle;
+    flex-shrink: 0;
+  }
+
+  /* Thin modern scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: hsl(240 3.8% 46.1% / 0.3); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: hsl(240 3.8% 46.1% / 0.5); }
+  * { scrollbar-width: thin; scrollbar-color: hsl(240 3.8% 46.1% / 0.3) transparent; }
+}
