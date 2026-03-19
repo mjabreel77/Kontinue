@@ -194,6 +194,20 @@ function migrate(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_signals_pending     ON signals(project_id, status, created_at);
     CREATE INDEX IF NOT EXISTS idx_task_deps_blocker   ON task_dependencies(blocker_task_id);
     CREATE INDEX IF NOT EXISTS idx_task_deps_blocked   ON task_dependencies(blocked_task_id);
+
+    CREATE TABLE IF NOT EXISTS external_links (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id    INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      provider      TEXT NOT NULL CHECK(provider IN ('github','linear')),
+      external_id   TEXT NOT NULL,
+      external_url  TEXT,
+      synced_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(task_id, provider)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_external_links_task ON external_links(task_id);
+    CREATE INDEX IF NOT EXISTS idx_external_links_proj ON external_links(project_id, provider);
   `)
 
   // Additive migrations: add new columns to existing tables when upgrading.

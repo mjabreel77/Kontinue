@@ -80,6 +80,8 @@ import {
   getTemplates,
   findTemplateByName,
   deleteTemplate,
+  linkTaskToExternal,
+  getExternalLink,
 } from '../store/queries.js'
 import { writeDecision, writeNote, writeSession, rewriteTaskList, writePlan, deletePlanFile, SUBAGENT_INSTRUCTIONS } from '../store/markdown.js'
 import { getBranch, getCommit, getRecentLog, getDiffFiles } from '../utils/git.js'
@@ -1729,6 +1731,40 @@ export async function startMcpServer(cwd: string): Promise<void> {
         : 'Subagent returned empty or unparseable result — nothing persisted.'
 
       return { content: [{ type: 'text' as const, text: `${summary}${contextWarning(project.id)}${signalCheck(project.id)}${statusLine(project.id)}` }] }
+    }
+  )
+
+  // ── GitHub / Linear link ─────────────────────────────────────────────────────
+
+  server.registerTool(
+    'link_external',
+    {
+      description: [
+        'Link a Kontinue task to a GitHub issue or Linear ticket.',
+        '',
+        'Stores the mapping so the dashboard shows linked issues and future sync is possible.',
+        'If the task already has a link for this provider, it will be updated.',
+      ].join('\n'),
+      inputSchema: {
+        task_title: z.string().describe('Partial title of the task to link'),
+        provider: z.enum(['github', 'linear']).describe('External provider'),
+        external_id: z.string().describe('Issue number or ticket ID (e.g. "42" for GitHub issue #42, "ENG-123" for Linear)'),
+        external_url: z.string().optional().describe('Full URL to the issue/ticket'),
+      },
+    },
+    async ({ task_title, provider, external_id, external_url }) => {
+      const project = getProject(cwd)
+      trackToolCall(project.id)
+      const task = findTaskByTitle(project.id, task_title)
+      if (!task) return { content: [{ type: 'text' as const, text: `No task found matching "${task_title}"${statusLine(project.id)}` }] }
+
+      const link = linkTaskToExternal(project.id, task.id, provider, external_id, external_url ?? null)
+      return {
+        content: [{
+          type: 'text' as const,
+          text: `Linked task #${task.id} "${task.title}" → ${provider} ${external_id}${external_url ? ` (${external_url})` : ''}${contextWarning(project.id)}${statusLine(project.id)}`
+        }]
+      }
     }
   )
 

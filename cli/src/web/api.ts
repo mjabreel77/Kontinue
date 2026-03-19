@@ -28,6 +28,9 @@ import {
   getSignalHistory,
   getVelocityMetrics,
   getSessionTimeline,
+  getDecisionChains,
+  getReplaySessions,
+  getExternalLinksForProject,
 } from '../store/queries.js'
 import { getBranch, getCommit } from '../utils/git.js'
 import { getDb } from '../store/db.js'
@@ -282,6 +285,36 @@ export function handleApi(
       const last = getLastSession(project.id)
       const since = active?.started_at ?? last?.started_at ?? new Date(Date.now() - 86_400_000).toISOString()
       jsonResponse(res, 200, getSessionTimeline(project.id, since))
+    } catch (err) {
+      jsonResponse(res, 500, { error: String(err) })
+    }
+    return true
+  }
+
+  // GET /api/decisions/graph — decision lineage chains
+  if (url === '/api/decisions/graph' && req.method === 'GET') {
+    try {
+      jsonResponse(res, 200, getDecisionChains(project.id))
+    } catch (err) {
+      jsonResponse(res, 500, { error: String(err) })
+    }
+    return true
+  }
+
+  // GET /api/replay — past sessions with events for replay mode
+  if (url === '/api/replay' && req.method === 'GET') {
+    try {
+      jsonResponse(res, 200, getReplaySessions(project.id))
+    } catch (err) {
+      jsonResponse(res, 500, { error: String(err) })
+    }
+    return true
+  }
+
+  // GET /api/external-links — all external links for the project
+  if (url === '/api/external-links' && req.method === 'GET') {
+    try {
+      jsonResponse(res, 200, getExternalLinksForProject(project.id))
     } catch (err) {
       jsonResponse(res, 500, { error: String(err) })
     }

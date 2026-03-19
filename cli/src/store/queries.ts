@@ -273,6 +273,61 @@ export function archiveTaskScopedDecisions(projectId: number, taskId: number): n
   return decisions.length
 }
 
+/** Build decision lineage chains. Returns chains ordered by newest decision. */
+export interface DecisionChainNode {
+  id: number
+  summary: string
+  status: string
+  created_at: string
+  superseded_by: number | null
+  tags: string | null
+}
+
+export function getDecisionChains(projectId: number): DecisionChainNode[][] {
+  const db = getDb()
+  const all = db.prepare(
+    'SELECT id, summary, status, created_at, superseded_by, tags FROM decisions WHERE project_id = ? ORDER BY created_at DESC'
+  ).all(projectId) as unknown as DecisionChainNode[]
+
+  // Build lookup maps
+  const byId = new Map<number, DecisionChainNode>()
+  const supersededIds = new Set<number>()
+  for (const d of all) {
+    byId.set(d.id, d)
+    if (d.superseded_by) supersededIds.add(d.id)
+  }
+
+  // Find chain heads (decisions that have been superseded — walk from root)
+  // A chain root is a superseded decision that was NOT itself a replacement
+  const visited = new Set<number>()
+  const chains: DecisionChainNode[][] = []
+
+  for (const d of all) {
+    if (visited.has(d.id)) continue
+    if (!d.superseded_by && !supersededIds.has(d.id)) continue // standalone, no chain
+
+    // Walk backwards to find root
+    let root = d
+    while (true) {
+      const parent = all.find(p => p.superseded_by === root.id)
+      if (parent && !visited.has(parent.id)) { root = parent } else break
+    }
+
+    // Walk forward from root
+    const chain: DecisionChainNode[] = []
+    let current: DecisionChainNode | undefined = root
+    while (current) {
+      if (visited.has(current.id)) break
+      visited.add(current.id)
+      chain.push(current)
+      current = current.superseded_by ? byId.get(current.superseded_by) : undefined
+    }
+    if (chain.length > 1) chains.push(chain)
+  }
+
+  return chains
+}
+
 /** Returns decisions created on or after the given ISO timestamp. */
 export function getDecisionsSince(projectId: number, since: string): Decision[] {
   return getDb().prepare(
@@ -577,6 +632,89 @@ export function getVelocityMetrics(projectId: number): VelocityMetrics {
     recentSessionCount,
     recentTasksDone,
   }
+}
+
+// -- Replay data --------------------------------------------------------------
+
+export interface ReplaySession {
+  id: number
+  started_at: string
+  ended_at: string | null
+  handoff_note: string | null
+  events: TimelineEvent[]
+}
+
+/** Get past sessions with their events for replay mode. Returns most recent `limit` sessions. */
+export function getReplaySessions(projectId: number, limit = 10): ReplaySession[] {
+  const db = getDb()
+  const sessions = db.prepare(
+    `SELECT id, started_at, ended_at, handoff_note FROM sessions
+     WHERE project_id = ? AND ended_at IS NOT NULL
+     ORDER BY started_at DESC LIMIT ?`
+  ).all(projectId, limit) as unknown as { id: number; started_at: string; ended_at: string | null; handoff_note: string | null }[]
+
+  return sessions.map(s => {
+    const events = db.prepare(`
+      SELECT 'checkpoint' AS type, id, progress AS summary, created_at, next_step AS detail FROM checkpoints
+        WHERE session_id = ?
+      UNION ALL
+      SELECT 'decision' AS type, id, summary, created_at, rationale AS detail FROM decisions
+        WHERE session_id = ?
+      UNION ALL
+      SELECT 'observation' AS type, id, content AS summary, created_at, NULL AS detail FROM notes
+        WHERE session_id = ?
+      ORDER BY created_at ASC
+    `).all(s.id, s.id, s.id) as unknown as TimelineEvent[]
+
+    return { ...s, events }
+  })
+}
+
+// -- External links (GitHub / Linear) -----------------------------------------
+
+export interface ExternalLink {
+  id: number
+  project_id: number
+  task_id: number
+  provider: string
+  external_id: string
+  external_url: string | null
+  synced_at: string
+}
+
+export function linkTaskToExternal(
+  projectId: number,
+  taskId: number,
+  provider: 'github' | 'linear',
+  externalId: string,
+  externalUrl: string | null
+): ExternalLink {
+  const db = getDb()
+  db.prepare(`
+    INSERT INTO external_links (project_id, task_id, provider, external_id, external_url)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(task_id, provider) DO UPDATE SET external_id = excluded.external_id,
+      external_url = excluded.external_url, synced_at = datetime('now')
+  `).run(projectId, taskId, provider, externalId, externalUrl)
+  return db.prepare(
+    'SELECT * FROM external_links WHERE task_id = ? AND provider = ?'
+  ).get(taskId, provider) as unknown as ExternalLink
+}
+
+export function getExternalLink(taskId: number, provider: 'github' | 'linear'): ExternalLink | undefined {
+  return getDb().prepare(
+    'SELECT * FROM external_links WHERE task_id = ? AND provider = ?'
+  ).get(taskId, provider) as unknown as ExternalLink | undefined
+}
+
+export function getExternalLinksForProject(projectId: number): ExternalLink[] {
+  return getDb().prepare(
+    'SELECT * FROM external_links WHERE project_id = ? ORDER BY synced_at DESC'
+  ).all(projectId) as unknown as ExternalLink[]
+}
+
+export function unlinkTaskExternal(taskId: number, provider: 'github' | 'linear'): void {
+  getDb().prepare('DELETE FROM external_links WHERE task_id = ? AND provider = ?').run(taskId, provider)
 }
 
 // -- Memory chunks ------------------------------------------------------------

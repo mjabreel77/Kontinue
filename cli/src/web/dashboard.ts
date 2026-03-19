@@ -196,8 +196,34 @@ export function getDashboardHtml(projectName: string): string {
   }
   .decision-row:last-child { border-bottom: none; }
   .decision-date { color: var(--muted); font-size: 11px; white-space: nowrap; min-width: 70px; }
+  .decision-status { font-size: 9px; font-weight: 600; padding: 1px 4px; border-radius: 3px; margin-left: 4px; }
+  .decision-status.active     { color: var(--green); border: 1px solid var(--green); }
+  .decision-status.superseded { color: var(--yellow); border: 1px solid var(--yellow); text-decoration: line-through; }
+  .decision-status.archived   { color: var(--muted); border: 1px solid var(--border); }
+
+  /* Decision graph */
+  .decision-chain { margin-bottom: 12px; padding: 8px; background: var(--bg2); border-radius: 6px; border: 1px solid var(--border); }
+  .chain-node { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 3px 0; }
+  .chain-node.superseded .chain-summary { text-decoration: line-through; color: var(--muted); }
+  .chain-node.active .chain-summary { color: var(--green); font-weight: 600; }
+  .chain-arrow { color: var(--muted); font-size: 14px; padding-left: 12px; }
   .decision-summary { font-size: 13px; flex: 1; }
   .decision-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 3px; }
+
+  .replay-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .replay-controls button { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; cursor: pointer; color: var(--fg); font-size: 13px; }
+  .replay-controls button:hover { background: var(--border); }
+  .replay-controls button:disabled { opacity: 0.4; cursor: default; }
+  .replay-counter { font-size: 12px; color: var(--muted); min-width: 60px; text-align: center; }
+  .replay-session-picker { background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; color: var(--fg); font-size: 12px; }
+  .replay-event { padding: 6px 8px; border-radius: 4px; margin-bottom: 4px; font-size: 12px; background: var(--bg2); border-left: 3px solid var(--border); }
+  .replay-event.active { border-left-color: var(--blue); background: color-mix(in srgb, var(--blue) 10%, var(--bg)); }
+  .replay-event .replay-type { font-weight: 600; text-transform: uppercase; font-size: 10px; margin-right: 6px; }
+  .replay-event .replay-type.checkpoint { color: var(--blue); }
+  .replay-event .replay-type.decision { color: #a78bfa; }
+  .replay-event .replay-type.observation { color: var(--yellow); }
+  .replay-event .replay-detail { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .replay-handoff { font-size: 12px; padding: 6px 8px; background: var(--bg2); border-radius: 4px; margin-top: 6px; color: var(--muted); border-left: 3px solid var(--green); }
 
   .plan-title { font-weight: 500; margin-bottom: 6px; }
   .plan-step {
@@ -545,6 +571,14 @@ export function getDashboardHtml(projectName: string): string {
         </div>
       </div>
 
+      <!-- Row 3b: Decision Lineage Graph -->
+      <div class="section-gap" id="decision-graph-card" style="display:none">
+        <div class="card">
+          <div class="card-header">Decision Lineage <span id="count-chains" style="color:var(--muted);font-weight:400"></span></div>
+          <div class="card-body" id="decision-graph-content"></div>
+        </div>
+      </div>
+
       <!-- Row 4: Velocity Metrics -->
       <div class="section-gap">
         <div class="grid grid-2">
@@ -555,6 +589,23 @@ export function getDashboardHtml(projectName: string): string {
           <div class="card">
             <div class="card-header">Session Timeline</div>
             <div class="card-body" id="timeline-content" style="max-height:300px;overflow-y:auto"><div class="empty">loading...</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Row 5: Replay Mode -->
+      <div class="section-gap" id="replay-card" style="display:none">
+        <div class="card">
+          <div class="card-header">Session Replay</div>
+          <div class="card-body">
+            <div class="replay-controls">
+              <select class="replay-session-picker" id="replay-session-select" onchange="selectReplaySession()"></select>
+              <button id="replay-prev" onclick="replayStep(-1)" disabled>&larr; Prev</button>
+              <span class="replay-counter" id="replay-counter">0 / 0</span>
+              <button id="replay-next" onclick="replayStep(1)" disabled>Next &rarr;</button>
+            </div>
+            <div id="replay-events"></div>
+            <div id="replay-handoff"></div>
           </div>
         </div>
       </div>
@@ -1007,6 +1058,116 @@ function renderTimeline(events) {
   }).join('') + '</div>'
 }
 
+// ── Replay mode ──────────────────────────────────────────────────────────────
+
+let replaySessions = []
+let replayIdx = -1       // index into replaySessions
+let replayEventIdx = -1  // current event within the session
+
+async function loadReplay() {
+  try {
+    const res = await fetch('/api/replay')
+    replaySessions = await res.json()
+  } catch(e) { replaySessions = [] }
+  const card = document.getElementById('replay-card')
+  if (!replaySessions.length) { card.style.display = 'none'; return }
+  card.style.display = 'block'
+  const sel = document.getElementById('replay-session-select')
+  sel.innerHTML = replaySessions.map((s, i) =>
+    '<option value="' + i + '">Session ' + s.id + ' — ' + s.started_at.slice(0, 16).replace('T', ' ') + '</option>'
+  ).join('')
+  replayIdx = 0
+  replayEventIdx = -1
+  renderReplaySession()
+}
+
+function selectReplaySession() {
+  replayIdx = parseInt(document.getElementById('replay-session-select').value, 10)
+  replayEventIdx = -1
+  renderReplaySession()
+}
+
+function replayStep(dir) {
+  const session = replaySessions[replayIdx]
+  if (!session) return
+  const next = replayEventIdx + dir
+  if (next < 0 || next >= session.events.length) return
+  replayEventIdx = next
+  renderReplaySession()
+}
+
+function renderReplaySession() {
+  const session = replaySessions[replayIdx]
+  if (!session) return
+  const eventsEl = document.getElementById('replay-events')
+  const handoffEl = document.getElementById('replay-handoff')
+  const counter = document.getElementById('replay-counter')
+  const prevBtn = document.getElementById('replay-prev')
+  const nextBtn = document.getElementById('replay-next')
+
+  const total = session.events.length
+  counter.textContent = (replayEventIdx + 1) + ' / ' + total
+  prevBtn.disabled = replayEventIdx <= 0
+  nextBtn.disabled = replayEventIdx >= total - 1
+
+  eventsEl.innerHTML = session.events.map((ev, i) => {
+    const isActive = i === replayEventIdx ? ' active' : ''
+    const visible = i <= replayEventIdx ? '' : ' style="opacity:0.3"'
+    const snippet = ev.summary.length > 120 ? esc(ev.summary.slice(0, 120)) + '\u2026' : esc(ev.summary)
+    const detail = ev.detail ? '<div class="replay-detail">' + (ev.detail.length > 100 ? esc(ev.detail.slice(0, 100)) + '\u2026' : esc(ev.detail)) + '</div>' : ''
+    const time = ev.created_at.slice(11, 16)
+    return '<div class="replay-event' + isActive + '"' + visible + '>' +
+      '<span style="color:var(--muted);margin-right:4px">' + time + '</span>' +
+      '<span class="replay-type ' + ev.type + '">' + ev.type + '</span>' +
+      snippet + detail + '</div>'
+  }).join('')
+
+  handoffEl.innerHTML = session.handoff_note
+    ? '<div class="replay-handoff"><strong>Handoff:</strong> ' + esc(session.handoff_note.slice(0, 300)) + '</div>'
+    : ''
+}
+
+// ── Decision graph ───────────────────────────────────────────────────────────
+
+async function loadDecisionGraph() {
+  try {
+    const res = await fetch('/api/decisions/graph')
+    const chains = await res.json()
+    renderDecisionGraph(chains)
+  } catch(e) {
+    // silently ignore — graph is supplementary
+  }
+}
+
+function renderDecisionGraph(chains) {
+  const card = document.getElementById('decision-graph-card')
+  const el = document.getElementById('decision-graph-content')
+  const cnt = document.getElementById('count-chains')
+  if (!el || !card) return
+  if (!chains || !chains.length) {
+    card.style.display = 'none'
+    return
+  }
+  card.style.display = 'block'
+  cnt.textContent = '(' + chains.length + ' chain' + (chains.length > 1 ? 's' : '') + ')'
+  el.innerHTML = chains.map(chain => {
+    const nodes = chain.map((node, i) => {
+      const arrow = i < chain.length - 1 ? '<div class="chain-arrow">\u2193</div>' : ''
+      const snippet = node.summary.length > 80 ? esc(node.summary.slice(0, 80)) + '\u2026' : esc(node.summary)
+      const tags = (node.tags || '').split(',').filter(Boolean).slice(0, 3).map(t =>
+        '<span class="tag">' + esc(t.trim()) + '</span>'
+      ).join('')
+      return \`<div class="chain-node \${node.status}">
+        <span class="decision-status \${node.status}">\${node.status}</span>
+        <span class="chain-summary">\${snippet}</span>
+        <span style="font-size:10px;color:var(--muted)">\${node.created_at.slice(0,10)}</span>
+        \${tags}
+      </div>\${arrow}\`
+    }).join('')
+    return '<div class="decision-chain">' + nodes + '</div>'
+  }).join('')
+}
+
 // ── Answer question ──────────────────────────────────────────────────────────
 
 function toggleAnswer(id) {
@@ -1151,10 +1312,13 @@ function renderDecisions(decisions) {
     const viewBtn = hasDetail
       ? \`<button class="view-btn" onclick="showDecisionModal(\${d.id})">View details &#8599;</button>\`
       : ''
+    const statusBadge = d.status && d.status !== 'active'
+      ? \`<span class="decision-status \${d.status}">\${d.status}</span>\`
+      : ''
     return \`<div class="decision-row">
       <div class="decision-date">\${d.created_at.slice(0,10)}</div>
       <div class="decision-summary" style="flex:1">
-        \${esc(summary)} \${confidenceBadge(d.confidence)}
+        \${esc(summary)} \${confidenceBadge(d.confidence)}\${statusBadge}
         \${tags ? \`<div class="decision-tags">\${tags}</div>\` : ''}
         \${viewBtn}
       </div>
@@ -1277,6 +1441,8 @@ function render(data) {
   fetchSignalHistory()
   loadVelocity()
   loadTimeline()
+  loadDecisionGraph()
+  loadReplay()
 
   document.getElementById('status-left').textContent =
     'Updated ' + new Date(data.generatedAt).toLocaleTimeString()
