@@ -377,6 +377,56 @@ export function getDashboardHtml(projectName: string): string {
   .signal-content { flex: 1; word-break: break-word; color: var(--text); }
   .signal-meta { color: var(--muted); font-size: 10px; }
 
+  /* Signal history */
+  .signal-history-filters { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  .signal-history-filters select { font-size: 11px; padding: 2px 6px; background: var(--bg2); color: var(--text); border: 1px solid var(--border); border-radius: 4px; }
+  .signal-history-row {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 6px 0; border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .signal-history-row:last-child { border-bottom: none; }
+  .signal-status-badge {
+    font-size: 9px; font-weight: 500; padding: 1px 4px;
+    border-radius: 3px; white-space: nowrap;
+  }
+  .signal-status-badge.pending      { background: var(--bg3); color: var(--yellow); border: 1px solid var(--yellow); }
+  .signal-status-badge.delivered    { background: var(--bg3); color: var(--cyan); border: 1px solid var(--cyan); }
+  .signal-status-badge.acknowledged { background: var(--bg3); color: var(--green); border: 1px solid var(--green); }
+  .signal-timing { color: var(--muted); font-size: 10px; font-family: monospace; }
+  .signal-agent-reply { font-size: 11px; color: var(--cyan); margin-top: 3px; padding: 3px 6px; background: var(--bg2); border-left: 2px solid var(--cyan); border-radius: 2px; }
+  .signal-history-pager { display: flex; justify-content: center; gap: 8px; margin-top: 8px; }
+
+  /* Velocity metrics */
+  .velocity-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+  .velocity-stat { text-align: center; padding: 8px; background: var(--bg2); border-radius: 6px; border: 1px solid var(--border); }
+  .velocity-stat .stat-value { font-size: 24px; font-weight: 700; color: var(--cyan); line-height: 1.2; }
+  .velocity-stat .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .velocity-sub { font-size: 11px; color: var(--muted); text-align: center; margin-top: 8px; }
+
+  /* Session timeline */
+  .timeline { position: relative; padding-left: 20px; }
+  .timeline::before { content: ''; position: absolute; left: 6px; top: 0; bottom: 0; width: 2px; background: var(--border); }
+  .timeline-event { position: relative; padding: 4px 0 10px 0; font-size: 12px; }
+  .timeline-event::before {
+    content: ''; position: absolute; left: -18px; top: 8px;
+    width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--bg);
+  }
+  .timeline-event.checkpoint::before { background: var(--blue); }
+  .timeline-event.task::before       { background: var(--green); }
+  .timeline-event.decision::before   { background: var(--purple); }
+  .timeline-event.signal::before     { background: var(--orange); }
+  .timeline-event.observation::before { background: var(--yellow); }
+  .timeline-time { font-size: 10px; color: var(--muted); font-family: monospace; }
+  .timeline-summary { color: var(--text); word-break: break-word; }
+  .timeline-detail { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .timeline-type { font-size: 9px; font-weight: 600; text-transform: uppercase; margin-right: 4px; }
+  .timeline-type.checkpoint  { color: var(--blue); }
+  .timeline-type.task        { color: var(--green); }
+  .timeline-type.decision    { color: var(--purple); }
+  .timeline-type.signal      { color: var(--orange); }
+  .timeline-type.observation { color: var(--yellow); }
+
   /* Task items checklist */
   .task-items { margin-top: 6px; }
   .task-item {
@@ -494,6 +544,20 @@ export function getDashboardHtml(projectName: string): string {
           </div>
         </div>
       </div>
+
+      <!-- Row 4: Velocity Metrics -->
+      <div class="section-gap">
+        <div class="grid grid-2">
+          <div class="card">
+            <div class="card-header">Velocity</div>
+            <div class="card-body" id="velocity-content"><div class="empty">loading...</div></div>
+          </div>
+          <div class="card">
+            <div class="card-header">Session Timeline</div>
+            <div class="card-body" id="timeline-content" style="max-height:300px;overflow-y:auto"><div class="empty">loading...</div></div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Right sidebar: Pending Signals + Activity Feed -->
@@ -501,6 +565,37 @@ export function getDashboardHtml(projectName: string): string {
       <div class="card section-gap" id="pending-signals-card" style="display:none">
         <div class="card-header" style="color:var(--yellow)">&#9888; Pending Signals <span id="count-pending-sigs"></span></div>
         <div class="card-body" id="pending-signals-content"></div>
+      </div>
+      <div class="card section-gap">
+        <div class="card-header">Signal History</div>
+        <div class="card-body">
+          <div class="signal-history-filters">
+            <select id="sig-filter-type" onchange="loadSignalHistory()">
+              <option value="">All types</option>
+              <option value="message">Message</option>
+              <option value="priority">Priority</option>
+              <option value="abort">Abort</option>
+              <option value="answer">Answer</option>
+            </select>
+            <select id="sig-filter-status" onchange="loadSignalHistory()">
+              <option value="">All status</option>
+              <option value="pending">Pending</option>
+              <option value="delivered">Delivered</option>
+              <option value="acknowledged">Acknowledged</option>
+            </select>
+            <select id="sig-filter-source" onchange="loadSignalHistory()">
+              <option value="">All sources</option>
+              <option value="cli">CLI</option>
+              <option value="web">Web</option>
+            </select>
+          </div>
+          <div id="signal-history-content"><div class="empty">loading...</div></div>
+          <div class="signal-history-pager" id="signal-history-pager" style="display:none">
+            <button class="btn btn-sm btn-outline" id="sig-prev" onclick="sigHistoryPage(-1)">&laquo; Prev</button>
+            <span id="sig-page-info" style="font-size:11px;color:var(--muted);align-self:center"></span>
+            <button class="btn btn-sm btn-outline" id="sig-next" onclick="sigHistoryPage(1)">Next &raquo;</button>
+          </div>
+        </div>
       </div>
       <div class="card" style="position:sticky;top:60px">
         <div class="card-header">Activity Feed</div>
@@ -734,7 +829,182 @@ async function ackSignal(id) {
   try {
     await fetch('/api/signals/' + id + '/acknowledge', { method: 'POST' })
     showToast('Signal acknowledged')
+    loadSignalHistory()
   } catch(e) { showToast('Error: ' + e.message) }
+}
+
+// ── Signal history ───────────────────────────────────────────────────────────
+
+let sigHistoryOffset = 0
+const SIG_PAGE_SIZE = 15
+
+function fmtDurationMs(ms) {
+  if (ms < 1000) return ms + 'ms'
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return s + 's'
+  const m = Math.floor(s / 60)
+  if (m < 60) return m + 'm ' + (s % 60) + 's'
+  const h = Math.floor(m / 60)
+  return h + 'h ' + (m % 60) + 'm'
+}
+
+async function loadSignalHistory() {
+  sigHistoryOffset = 0
+  await fetchSignalHistory()
+}
+
+function sigHistoryPage(dir) {
+  sigHistoryOffset = Math.max(0, sigHistoryOffset + dir * SIG_PAGE_SIZE)
+  fetchSignalHistory()
+}
+
+async function fetchSignalHistory() {
+  const type = document.getElementById('sig-filter-type').value
+  const status = document.getElementById('sig-filter-status').value
+  const source = document.getElementById('sig-filter-source').value
+  const params = new URLSearchParams()
+  if (type) params.set('type', type)
+  if (status) params.set('status', status)
+  if (source) params.set('source', source)
+  params.set('limit', String(SIG_PAGE_SIZE))
+  params.set('offset', String(sigHistoryOffset))
+  try {
+    const res = await fetch('/api/signals/history?' + params.toString())
+    const data = await res.json()
+    renderSignalHistory(data.signals || [], data.total || 0)
+  } catch(e) {
+    document.getElementById('signal-history-content').innerHTML = '<div class="empty">error loading</div>'
+  }
+}
+
+function renderSignalHistory(signals, total) {
+  const el = document.getElementById('signal-history-content')
+  const pager = document.getElementById('signal-history-pager')
+  if (!el) return
+  if (!signals.length) {
+    el.innerHTML = '<div class="empty">no signals</div>'
+    pager.style.display = 'none'
+    return
+  }
+  el.innerHTML = signals.map(s => {
+    const typeClass = s.type || 'message'
+    const createdMs = new Date(s.created_at.endsWith('Z') ? s.created_at : s.created_at + 'Z').getTime()
+    const deliveredMs = s.delivered_at ? new Date(s.delivered_at.endsWith('Z') ? s.delivered_at : s.delivered_at + 'Z').getTime() : null
+    const ackedMs = s.acknowledged_at ? new Date(s.acknowledged_at.endsWith('Z') ? s.acknowledged_at : s.acknowledged_at + 'Z').getTime() : null
+    const deliveryTime = deliveredMs ? fmtDurationMs(deliveredMs - createdMs) : null
+    const ackTime = (ackedMs && deliveredMs) ? fmtDurationMs(ackedMs - deliveredMs) : null
+    const timing = [deliveryTime && ('&#9202; ' + deliveryTime), ackTime && ('&#10003; ' + ackTime)].filter(Boolean).join(' ')
+    return \`<div class="signal-history-row">
+      <span class="signal-type-badge \${typeClass}">\${(s.type || 'msg').toUpperCase()}</span>
+      <div style="flex:1">
+        <div class="signal-content">\${esc(s.content)}</div>
+        <div class="signal-meta">
+          \${fmtAge(s.created_at)} · \${esc(s.source || 'cli')}
+          <span class="signal-status-badge \${s.status}">\${s.status}</span>
+          \${timing ? '<span class="signal-timing">' + timing + '</span>' : ''}
+        </div>
+        \${s.agent_response ? '<div class="signal-agent-reply">&#128172; ' + esc(s.agent_response) + '</div>' : ''}
+      </div>
+    </div>\`
+  }).join('')
+  // Pager
+  if (total > SIG_PAGE_SIZE) {
+    pager.style.display = 'flex'
+    document.getElementById('sig-prev').disabled = sigHistoryOffset === 0
+    document.getElementById('sig-next').disabled = sigHistoryOffset + SIG_PAGE_SIZE >= total
+    document.getElementById('sig-page-info').textContent = (sigHistoryOffset + 1) + '\u2013' + Math.min(sigHistoryOffset + SIG_PAGE_SIZE, total) + ' of ' + total
+  } else {
+    pager.style.display = 'none'
+  }
+}
+
+// ── Velocity metrics ─────────────────────────────────────────────────────────
+
+async function loadVelocity() {
+  try {
+    const res = await fetch('/api/velocity')
+    const v = await res.json()
+    renderVelocity(v)
+  } catch(e) {
+    document.getElementById('velocity-content').innerHTML = '<div class="empty">error loading</div>'
+  }
+}
+
+function fmtCycleTime(minutes) {
+  if (minutes === null || minutes === undefined) return '\u2014'
+  if (minutes < 60) return minutes + 'm'
+  const h = Math.floor(minutes / 60)
+  return h + 'h ' + (minutes % 60) + 'm'
+}
+
+function renderVelocity(v) {
+  const el = document.getElementById('velocity-content')
+  if (!el) return
+  el.innerHTML = \`
+    <div class="velocity-grid">
+      <div class="velocity-stat">
+        <div class="stat-value">\${v.totalTasksDone}</div>
+        <div class="stat-label">Tasks Done</div>
+      </div>
+      <div class="velocity-stat">
+        <div class="stat-value">\${v.tasksPerSession}</div>
+        <div class="stat-label">Tasks/Session</div>
+      </div>
+      <div class="velocity-stat">
+        <div class="stat-value">\${fmtCycleTime(v.avgCycleTimeMinutes)}</div>
+        <div class="stat-label">Avg Cycle Time</div>
+      </div>
+      <div class="velocity-stat">
+        <div class="stat-value">\${v.checkpointsPerSession}</div>
+        <div class="stat-label">Checkpoints/Session</div>
+      </div>
+      <div class="velocity-stat">
+        <div class="stat-value">\${v.decisionsPerSession}</div>
+        <div class="stat-label">Decisions/Session</div>
+      </div>
+      <div class="velocity-stat">
+        <div class="stat-value">\${v.totalSessions}</div>
+        <div class="stat-label">Total Sessions</div>
+      </div>
+    </div>
+    <div class="velocity-sub">Last 7 days: \${v.recentTasksDone} tasks done across \${v.recentSessionCount} sessions</div>
+  \`
+}
+
+// ── Session timeline ─────────────────────────────────────────────────────────
+
+async function loadTimeline() {
+  try {
+    const res = await fetch('/api/timeline')
+    const events = await res.json()
+    renderTimeline(events)
+  } catch(e) {
+    document.getElementById('timeline-content').innerHTML = '<div class="empty">error loading</div>'
+  }
+}
+
+function fmtTime(dateStr) {
+  const d = new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z')
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function renderTimeline(events) {
+  const el = document.getElementById('timeline-content')
+  if (!el) return
+  if (!events || !events.length) {
+    el.innerHTML = '<div class="empty">no events yet</div>'
+    return
+  }
+  const snippet = (text, max) => text && text.length > max ? esc(text.slice(0, max)) + '\u2026' : esc(text || '')
+  el.innerHTML = '<div class="timeline">' + events.map(e => {
+    const detail = e.detail ? \`<div class="timeline-detail">\${snippet(e.detail, 80)}</div>\` : ''
+    return \`<div class="timeline-event \${e.type}">
+      <span class="timeline-time">\${fmtTime(e.created_at)}</span>
+      <span class="timeline-type \${e.type}">\${e.type}</span>
+      <span class="timeline-summary">\${snippet(e.summary, 100)}</span>
+      \${detail}
+    </div>\`
+  }).join('') + '</div>'
 }
 
 // ── Answer question ──────────────────────────────────────────────────────────
@@ -1004,6 +1274,9 @@ function render(data) {
   renderHandoff(data.lastHandoff)
   renderActivity(data.activity)
   renderPendingSignals(data.signals?.pending || [])
+  fetchSignalHistory()
+  loadVelocity()
+  loadTimeline()
 
   document.getElementById('status-left').textContent =
     'Updated ' + new Date(data.generatedAt).toLocaleTimeString()

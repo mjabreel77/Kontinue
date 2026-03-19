@@ -239,6 +239,9 @@ function migrate(db: DatabaseSync): void {
   // Memory confidence decay: exempt certain chunks from stale flagging.
   addColumnIfMissing('memory_chunks', 'decay_exempt', 'INTEGER NOT NULL DEFAULT 0')
 
+  // Signal two-way replies: store agent response when acknowledging.
+  addColumnIfMissing('signals', 'agent_response', 'TEXT')
+
   // Add UNIQUE constraint to memory_chunks for proper upsert deduplication.
   // SQLite doesn't support ADD CONSTRAINT, so we create a unique index instead.
   // First, remove any duplicate rows keeping only the most recent one per (project_id, source_type, source_id).

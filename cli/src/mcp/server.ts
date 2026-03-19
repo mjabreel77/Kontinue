@@ -60,6 +60,8 @@ import {
   getUnacknowledgedSignals,
   getStaleInProgressTasks,
   getSessionActivity,
+  getSignalHistory,
+  getChangesSinceRead,
   incrementToolCalls,
   getSessionToolCalls,
   getOpenObservations,
@@ -88,10 +90,46 @@ function parseUtc(dateStr: string): number {
   return new Date(dateStr.endsWith('Z') ? dateStr : dateStr + 'Z').getTime()
 }
 
+/** Format a millisecond duration as human-readable string. */
+function fmtDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  const s = Math.floor(ms / 1000)
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  const h = Math.floor(m / 60)
+  return `${h}h ${m % 60}m`
+}
+
+/** Format a UTC datetime string as relative age (e.g. "5m ago"). */
+function fmtAgeMcp(dateStr: string): string {
+  const ms = Date.now() - parseUtc(dateStr)
+  if (ms < 60_000) return 'just now'
+  if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m ago`
+  if (ms < 86_400_000) return `${Math.floor(ms / 3_600_000)}h ago`
+  return `${Math.floor(ms / 86_400_000)}d ago`
+}
+
 function getProject(cwd: string) {
   const project = findProjectByPath(cwd)
   if (!project) throw new Error(`No Kontinue project at ${cwd}. Run: kontinue init`)
   return project
+}
+
+/** Extract file mentions from text (e.g. "server.ts", "src/store/queries.ts"). */
+const FILE_MENTION_RE = /(?:^|[\s`'"(,])([a-zA-Z0-9_\-./]+\.[a-zA-Z]{1,10})\b/g
+const CODE_EXTENSIONS = new Set(['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'json', 'py', 'rs', 'go', 'java', 'kt', 'rb', 'cs', 'cpp', 'c', 'h', 'hpp', 'sql', 'yaml', 'yml', 'toml', 'md', 'html', 'css', 'scss', 'svelte', 'vue', 'sh', 'bash', 'zsh', 'ps1', 'psm1'])
+function extractFileMentions(text: string): string[] {
+  const matches = new Set<string>()
+  let m: RegExpExecArray | null
+  while ((m = FILE_MENTION_RE.exec(text)) !== null) {
+    const file = m[1]
+    const ext = file.split('.').pop()?.toLowerCase()
+    if (ext && CODE_EXTENSIONS.has(ext) && !file.startsWith('.') && file.length > 2) {
+      matches.add(file)
+    }
+  }
+  return [...matches]
 }
 
 export async function startMcpServer(cwd: string): Promise<void> {
@@ -402,12 +440,31 @@ export async function startMcpServer(cwd: string): Promise<void> {
         if (recentLog) lines.push('', '## Recent Commits', '```', recentLog, '```')
       }
 
+      // Session diff — what changed since last read_context call
+      if (activeSession.context_read_at) {
+        const diff = getChangesSinceRead(project.id, activeSession.context_read_at)
+        const hasChanges = diff.newTasks.length + diff.completedTasks.length + diff.newDecisions.length + diff.newObservations.length + diff.newSignals + diff.newCheckpoints > 0
+        if (hasChanges) {
+          lines.push('', '## Changes Since Last Read')
+          if (diff.completedTasks.length > 0)
+            lines.push(`**Tasks completed:** ${diff.completedTasks.map(t => `#${t.id} ${t.title}`).join(', ')}`)
+          if (diff.newTasks.length > 0)
+            lines.push(`**New tasks:** ${diff.newTasks.map(t => `#${t.id} ${t.title}`).join(', ')}`)
+          if (diff.newDecisions.length > 0)
+            lines.push(`**New decisions:** ${diff.newDecisions.map(d => d.summary).join('; ')}`)
+          if (diff.newObservations.length > 0)
+            lines.push(`**New observations:** ${diff.newObservations.length} added`)
+          if (diff.newSignals > 0)
+            lines.push(`**Signals:** ${diff.newSignals} new`)
+          if (diff.newCheckpoints > 0)
+            lines.push(`**Checkpoints:** ${diff.newCheckpoints} saved`)
+        }
+      }
+
       lines.push('', '---', '_Kontinue is your task list. If a step is not checkpointed, it has not been recorded._')
 
-      // Mark context read
-      if (activeSession && !activeSession.context_read_at) {
-        markContextRead(activeSession.id)
-      }
+      // Mark context read — always update so diff tracking works on next call
+      markContextRead(activeSession.id)
 
       const text = lines.filter(l => l !== undefined).join('\n') + signalCheck(project.id)
       return { content: [{ type: 'text' as const, text }] }
@@ -678,17 +735,23 @@ export async function startMcpServer(cwd: string): Promise<void> {
       trackToolCall(project.id)
       const session = getActiveSession(project.id)
 
+      // Auto-detect file mentions if files param not provided
+      const resolvedFiles = files || (() => {
+        const mentions = extractFileMentions([summary, rationale, alternatives, context].filter(Boolean).join(' '))
+        return mentions.length > 0 ? mentions.join(', ') : undefined
+      })()
+
       const linkedTask = task_title ? findTaskByTitle(project.id, task_title) : null
-      const decision = addDecision(project.id, summary, rationale, alternatives, session?.id, getBranch(cwd), getCommit(cwd), context, files, tags, linkedTask?.id, scope)
+      const decision = addDecision(project.id, summary, rationale, alternatives, session?.id, getBranch(cwd), getCommit(cwd), context, resolvedFiles, tags, linkedTask?.id, scope)
       writeDecision(cwd, decision)
 
       const chunkContent = [
         `Decision: ${summary}`,
-        rationale    && `Rationale: ${rationale}`,
-        alternatives && `Alternatives: ${alternatives}`,
-        context      && `Context: ${context}`,
-        files        && `Files: ${files}`,
-        tags         && `Tags: ${tags}`,
+        rationale      && `Rationale: ${rationale}`,
+        alternatives   && `Alternatives: ${alternatives}`,
+        context        && `Context: ${context}`,
+        resolvedFiles  && `Files: ${resolvedFiles}`,
+        tags           && `Tags: ${tags}`,
       ].filter(Boolean).join('\n')
       upsertChunk(project.id, 'decision', decision.id, chunkContent)
 
@@ -699,7 +762,7 @@ export async function startMcpServer(cwd: string): Promise<void> {
 
       // Share to global cross-project memory if requested
       if (share) {
-        shareDecision(project.name, cwd, summary, rationale, alternatives, tags, files)
+        shareDecision(project.name, cwd, summary, rationale, alternatives, tags, resolvedFiles)
       }
 
       const warn = contextWarning(project.id)
@@ -843,10 +906,16 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const session = getActiveSession(project.id)
       const linkedTask = task_title ? findTaskByTitle(project.id, task_title) : null
 
+      // Auto-detect file mentions if files param not provided
+      const resolvedFiles = files || (() => {
+        const mentions = extractFileMentions(observation)
+        return mentions.length > 0 ? mentions.join(', ') : undefined
+      })()
+
       const content = [
         `Observation: ${observation}`,
         task_title ? `Task: ${task_title}` : '',
-        files ? `Files: ${files}` : '',
+        resolvedFiles ? `Files: ${resolvedFiles}` : '',
       ].filter(Boolean).join('\n')
 
       const note = addNote(project.id, content, session?.id, linkedTask?.id)
@@ -1384,13 +1453,65 @@ export async function startMcpServer(cwd: string): Promise<void> {
       const project = getProject(cwd)
       trackToolCall(project.id)
       if (signal_id) {
-        markSignalAcknowledged(signal_id)
+        markSignalAcknowledged(signal_id, response)
       } else {
         const delivered = getUnacknowledgedSignals(project.id)
-        for (const s of delivered) markSignalAcknowledged(s.id)
+        for (const s of delivered) markSignalAcknowledged(s.id, response)
       }
       const msg = response ? `Signal(s) acknowledged: ${response}` : 'Signal(s) acknowledged.'
       return { content: [{ type: 'text' as const, text: `${msg}${contextWarning(project.id)}${statusLine(project.id)}` }] }
+    }
+  )
+
+  // ── signal_history ────────────────────────────────────────────────
+
+  server.registerTool(
+    'signal_history',
+    {
+      description: [
+        'Query the full signal history log with optional filters.',
+        '',
+        'Use this to review past developer signals, check response times,',
+        'or audit the communication trail between developer and agent.',
+        'Returns signals in reverse chronological order with delivery/acknowledgment timestamps.',
+      ].join('\n'),
+      inputSchema: {
+        type:   z.enum(['message', 'priority', 'abort', 'answer']).optional().describe('Filter by signal type'),
+        source: z.enum(['cli', 'web']).optional().describe('Filter by signal source'),
+        status: z.enum(['pending', 'delivered', 'acknowledged']).optional().describe('Filter by signal status'),
+        limit:  z.number().optional().default(20).describe('Max signals to return (default 20)'),
+        offset: z.number().optional().default(0).describe('Pagination offset'),
+      },
+    },
+    async ({ type, source, status, limit, offset }) => {
+      const project = getProject(cwd)
+      trackToolCall(project.id)
+      const { signals, total } = getSignalHistory(project.id, { type, source, status, limit, offset })
+      if (signals.length === 0) {
+        const filterNote = [type && `type=${type}`, source && `source=${source}`, status && `status=${status}`].filter(Boolean).join(', ')
+        return { content: [{ type: 'text' as const, text: `No signals found${filterNote ? ` (filters: ${filterNote})` : ''}.${statusLine(project.id)}` }] }
+      }
+      const lines = [`## Signal History (${offset + 1}–${offset + signals.length} of ${total})`, '']
+      for (const s of signals) {
+        const prefix = s.type === 'abort' ? 'URGENT'
+          : s.type === 'priority' ? 'PRIORITY'
+          : s.type === 'answer' ? 'ANSWER'
+          : 'MESSAGE'
+        const age = fmtAgeMcp(s.created_at)
+        const deliveryTime = s.delivered_at && s.created_at
+          ? fmtDuration(parseUtc(s.delivered_at) - parseUtc(s.created_at))
+          : null
+        const ackTime = s.acknowledged_at && s.delivered_at
+          ? fmtDuration(parseUtc(s.acknowledged_at) - parseUtc(s.delivered_at))
+          : null
+        const timing = [deliveryTime && `delivered: ${deliveryTime}`, ackTime && `ack: ${ackTime}`].filter(Boolean).join(', ')
+        lines.push(`- **[${prefix}]** ${s.content} _(${age}, ${s.source}, ${s.status}${timing ? ` | ${timing}` : ''})_ #${s.id}`)
+        if (s.agent_response) lines.push(`  > **Agent reply:** ${s.agent_response}`)
+      }
+      if (total > offset + signals.length) {
+        lines.push('', `_${total - offset - signals.length} more — use offset=${offset + signals.length} to see next page_`)
+      }
+      return { content: [{ type: 'text' as const, text: `${lines.join('\n')}${statusLine(project.id)}` }] }
     }
   )
 

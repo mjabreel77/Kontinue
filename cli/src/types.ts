@@ -139,4 +139,5 @@ export interface Signal {
   created_at: string
   delivered_at: string | null
   acknowledged_at: string | null
+  agent_response: string | null
 }

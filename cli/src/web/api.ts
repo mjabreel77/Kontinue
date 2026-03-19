@@ -25,6 +25,9 @@ import {
   getBlockers,
   getBlockedBy,
   getAllDependencies,
+  getSignalHistory,
+  getVelocityMetrics,
+  getSessionTimeline,
 } from '../store/queries.js'
 import { getBranch, getCommit } from '../utils/git.js'
 import { getDb } from '../store/db.js'
@@ -256,6 +259,56 @@ export function handleApi(
     try {
       const data = buildApiData(project, cwd)
       jsonResponse(res, 200, data)
+    } catch (err) {
+      jsonResponse(res, 500, { error: String(err) })
+    }
+    return true
+  }
+
+  // GET /api/velocity — velocity metrics
+  if (url === '/api/velocity' && req.method === 'GET') {
+    try {
+      jsonResponse(res, 200, getVelocityMetrics(project.id))
+    } catch (err) {
+      jsonResponse(res, 500, { error: String(err) })
+    }
+    return true
+  }
+
+  // GET /api/timeline — session timeline events
+  if (url === '/api/timeline' && req.method === 'GET') {
+    try {
+      const active = getActiveSession(project.id)
+      const last = getLastSession(project.id)
+      const since = active?.started_at ?? last?.started_at ?? new Date(Date.now() - 86_400_000).toISOString()
+      jsonResponse(res, 200, getSessionTimeline(project.id, since))
+    } catch (err) {
+      jsonResponse(res, 500, { error: String(err) })
+    }
+    return true
+  }
+
+  // GET /api/signals/history — paginated signal history with optional filters
+  if (url?.startsWith('/api/signals/history') && req.method === 'GET') {
+    try {
+      const params = new URL(url, 'http://localhost').searchParams
+      const type = params.get('type') || undefined
+      const source = params.get('source') || undefined
+      const status = params.get('status') || undefined
+      const limit = Math.min(parseInt(params.get('limit') ?? '50', 10) || 50, 200)
+      const offset = parseInt(params.get('offset') ?? '0', 10) || 0
+      // Validate enum values
+      if (type && !['message', 'priority', 'abort', 'answer'].includes(type)) {
+        jsonResponse(res, 400, { error: 'Invalid type filter' }); return true
+      }
+      if (source && !['cli', 'web'].includes(source)) {
+        jsonResponse(res, 400, { error: 'Invalid source filter' }); return true
+      }
+      if (status && !['pending', 'delivered', 'acknowledged'].includes(status)) {
+        jsonResponse(res, 400, { error: 'Invalid status filter' }); return true
+      }
+      const result = getSignalHistory(project.id, { type, source, status, limit, offset })
+      jsonResponse(res, 200, result)
     } catch (err) {
       jsonResponse(res, 500, { error: String(err) })
     }

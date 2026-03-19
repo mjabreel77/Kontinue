@@ -71,6 +71,52 @@ export function markContextRead(sessionId: number): void {
   ).run(sessionId)
 }
 
+/** Get a summary of changes since the last read_context call. */
+export interface ContextDiff {
+  newTasks:       Array<{ id: number; title: string }>
+  completedTasks: Array<{ id: number; title: string }>
+  newDecisions:   Array<{ id: number; summary: string }>
+  newObservations: Array<{ id: number; content: string }>
+  newSignals:     number
+  newCheckpoints: number
+}
+
+export function getChangesSinceRead(projectId: number, since: string): ContextDiff {
+  const db = getDb()
+  const newTasks = db.prepare(
+    'SELECT id, title FROM tasks WHERE project_id = ? AND created_at > ? ORDER BY created_at DESC'
+  ).all(projectId, since) as unknown as Array<{ id: number; title: string }>
+
+  const completedTasks = db.prepare(
+    "SELECT id, title FROM tasks WHERE project_id = ? AND status = 'done' AND updated_at > ? ORDER BY updated_at DESC"
+  ).all(projectId, since) as unknown as Array<{ id: number; title: string }>
+
+  const newDecisions = db.prepare(
+    'SELECT id, summary FROM decisions WHERE project_id = ? AND created_at > ? ORDER BY created_at DESC'
+  ).all(projectId, since) as unknown as Array<{ id: number; summary: string }>
+
+  const newObservations = db.prepare(
+    'SELECT id, content FROM notes WHERE project_id = ? AND created_at > ? ORDER BY created_at DESC'
+  ).all(projectId, since) as unknown as Array<{ id: number; content: string }>
+
+  const sigRow = db.prepare(
+    'SELECT COUNT(*) as n FROM signals WHERE project_id = ? AND created_at > ?'
+  ).get(projectId, since) as { n: number }
+
+  const cpRow = db.prepare(
+    'SELECT COUNT(*) as n FROM checkpoints WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?) AND created_at > ?'
+  ).get(projectId, since) as { n: number }
+
+  return {
+    newTasks,
+    completedTasks,
+    newDecisions,
+    newObservations,
+    newSignals: sigRow.n,
+    newCheckpoints: cpRow.n,
+  }
+}
+
 export function incrementToolCalls(sessionId: number): void {
   getDb().prepare(
     'UPDATE sessions SET tool_calls = COALESCE(tool_calls, 0) + 1 WHERE id = ?'
@@ -441,6 +487,98 @@ export function deleteTemplate(templateId: number): void {
   getDb().prepare('DELETE FROM task_templates WHERE id = ?').run(templateId)
 }
 
+// -- Velocity metrics ---------------------------------------------------------
+
+export interface TimelineEvent {
+  type: 'checkpoint' | 'task' | 'decision' | 'signal' | 'observation'
+  id: number
+  summary: string
+  created_at: string
+  detail: string | null
+}
+
+/** Get a chronological timeline of events for a session (or project-wide since a timestamp). */
+export function getSessionTimeline(projectId: number, since: string, limit = 100): TimelineEvent[] {
+  const db = getDb()
+  return db.prepare(`
+    SELECT 'checkpoint' AS type, id, progress AS summary, created_at, next_step AS detail FROM checkpoints
+      WHERE project_id = ? AND created_at >= ?
+    UNION ALL
+    SELECT 'task' AS type, id, title || ' → ' || status AS summary, updated_at AS created_at, outcome AS detail FROM tasks
+      WHERE project_id = ? AND updated_at >= ?
+    UNION ALL
+    SELECT 'decision' AS type, id, summary, created_at, rationale AS detail FROM decisions
+      WHERE project_id = ? AND created_at >= ?
+    UNION ALL
+    SELECT 'signal' AS type, id, '[' || UPPER(type) || '] ' || content AS summary, created_at, agent_response AS detail FROM signals
+      WHERE project_id = ? AND created_at >= ?
+    UNION ALL
+    SELECT 'observation' AS type, id, content AS summary, created_at, NULL AS detail FROM notes
+      WHERE project_id = ? AND created_at >= ?
+    ORDER BY created_at ASC
+    LIMIT ?
+  `).all(projectId, since, projectId, since, projectId, since, projectId, since, projectId, since, limit) as unknown as TimelineEvent[]
+}
+
+export interface VelocityMetrics {
+  totalSessions: number
+  totalTasksDone: number
+  tasksPerSession: number
+  avgCycleTimeMinutes: number | null  // avg time from task created_at to updated_at for done tasks
+  totalCheckpoints: number
+  checkpointsPerSession: number
+  totalDecisions: number
+  decisionsPerSession: number
+  recentSessionCount: number  // sessions in last 7 days
+  recentTasksDone: number     // tasks done in last 7 days
+}
+
+export function getVelocityMetrics(projectId: number): VelocityMetrics {
+  const db = getDb()
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000).toISOString()
+
+  const totalSessions = (db.prepare(
+    'SELECT COUNT(*) as n FROM sessions WHERE project_id = ?'
+  ).get(projectId) as { n: number }).n
+
+  const totalTasksDone = (db.prepare(
+    "SELECT COUNT(*) as n FROM tasks WHERE project_id = ? AND status = 'done'"
+  ).get(projectId) as { n: number }).n
+
+  const avgCycleRow = db.prepare(
+    "SELECT AVG((julianday(updated_at) - julianday(created_at)) * 1440) as avg_min FROM tasks WHERE project_id = ? AND status = 'done'"
+  ).get(projectId) as { avg_min: number | null }
+
+  const totalCheckpoints = (db.prepare(
+    'SELECT COUNT(*) as n FROM checkpoints WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)'
+  ).get(projectId) as { n: number }).n
+
+  const totalDecisions = (db.prepare(
+    'SELECT COUNT(*) as n FROM decisions WHERE project_id = ?'
+  ).get(projectId) as { n: number }).n
+
+  const recentSessionCount = (db.prepare(
+    'SELECT COUNT(*) as n FROM sessions WHERE project_id = ? AND started_at >= ?'
+  ).get(projectId, sevenDaysAgo) as { n: number }).n
+
+  const recentTasksDone = (db.prepare(
+    "SELECT COUNT(*) as n FROM tasks WHERE project_id = ? AND status = 'done' AND updated_at >= ?"
+  ).get(projectId, sevenDaysAgo) as { n: number }).n
+
+  return {
+    totalSessions,
+    totalTasksDone,
+    tasksPerSession: totalSessions > 0 ? Math.round((totalTasksDone / totalSessions) * 10) / 10 : 0,
+    avgCycleTimeMinutes: avgCycleRow.avg_min !== null ? Math.round(avgCycleRow.avg_min) : null,
+    totalCheckpoints,
+    checkpointsPerSession: totalSessions > 0 ? Math.round((totalCheckpoints / totalSessions) * 10) / 10 : 0,
+    totalDecisions,
+    decisionsPerSession: totalSessions > 0 ? Math.round((totalDecisions / totalSessions) * 10) / 10 : 0,
+    recentSessionCount,
+    recentTasksDone,
+  }
+}
+
 // -- Memory chunks ------------------------------------------------------------
 
 export function upsertChunk(
@@ -795,10 +933,10 @@ export function markSignalDelivered(signalId: number): void {
   ).run(signalId)
 }
 
-export function markSignalAcknowledged(signalId: number): void {
+export function markSignalAcknowledged(signalId: number, agentResponse?: string | null): void {
   getDb().prepare(
-    "UPDATE signals SET status = 'acknowledged', acknowledged_at = datetime('now') WHERE id = ?"
-  ).run(signalId)
+    "UPDATE signals SET status = 'acknowledged', acknowledged_at = datetime('now'), agent_response = COALESCE(?, agent_response) WHERE id = ?"
+  ).run(agentResponse ?? null, signalId)
 }
 
 export function getUnacknowledgedSignals(projectId: number): Signal[] {
@@ -811,5 +949,26 @@ export function getRecentSignals(projectId: number, limit = 20): Signal[] {
   return getDb().prepare(
     'SELECT * FROM signals WHERE project_id = ? ORDER BY created_at DESC LIMIT ?'
   ).all(projectId, limit) as unknown as Signal[]
+}
+
+/** Query signal history with optional filters. */
+export function getSignalHistory(
+  projectId: number,
+  opts: { type?: string; source?: string; status?: string; limit?: number; offset?: number } = {}
+): { signals: Signal[]; total: number } {
+  const db = getDb()
+  const clauses = ['project_id = ?']
+  const params: (string | number)[] = [projectId]
+  if (opts.type)   { clauses.push('type = ?');   params.push(opts.type) }
+  if (opts.source) { clauses.push('source = ?'); params.push(opts.source) }
+  if (opts.status) { clauses.push('status = ?'); params.push(opts.status) }
+  const where = clauses.join(' AND ')
+  const total = (db.prepare(`SELECT COUNT(*) AS cnt FROM signals WHERE ${where}`).get(...params) as any).cnt as number
+  const limit = opts.limit ?? 50
+  const offset = opts.offset ?? 0
+  const signals = db.prepare(
+    `SELECT * FROM signals WHERE ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`
+  ).all(...params, limit, offset) as unknown as Signal[]
+  return { signals, total }
 }
 
