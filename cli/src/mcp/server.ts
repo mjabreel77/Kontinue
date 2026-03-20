@@ -1091,24 +1091,25 @@ export async function startMcpServer(cwd: string): Promise<void> {
     'update_plan',
     {
       description: [
-        'Persist a plan AFTER the user has approved it. Do NOT call this to brainstorm — draft plans in chat first.',
+        'Manage multi-step plans. Plans track execution progress across tasks.',
         '',
-        'Workflow:',
-        '1. Detect that multi-step work is needed (3+ steps, multiple files/phases).',
-        '2. Draft the plan in chat: show title, goal, and numbered steps. Ask the user to confirm.',
-        '3. ONLY after the user approves (or adjusts), call this tool with action="add" to persist.',
+        '**Creating a plan:** Draft in chat first → get user approval → then call action="add" to persist.',
+        '',
+        '**Tracking progress (no approval needed):**',
+        '- After completing each step in a plan, call action="step_done" with the step content.',
+        '- After skipping a step, call action="step_skip".',
+        '- When ALL steps are done/skipped, the plan auto-completes. You can also set status manually.',
+        '',
+        '**This is critical:** Every time you finish work that corresponds to a plan step, you MUST call step_done.',
+        'Do not wait until the end — mark steps done as you go. Plans are your progress tracker.',
         '',
         'Actions:',
-        '- "add"       — Persist an approved plan. Provide title, optional goal, optional comma-separated steps.',
+        '- "add"       — Persist an approved plan (title required, optional goal, optional comma-separated steps).',
         '- "status"    — Change plan status: draft | active | complete | archived.',
-        '- "step_done" — Mark a step done by partial content match.',
-        '- "step_skip" — Mark a step skipped.',
+        '- "step_done" — Mark a step done by partial content match. Auto-completes plan if all steps are done.',
+        '- "step_skip" — Mark a step skipped. Auto-completes plan if all remaining steps are done/skipped.',
         '- "step_add"  — Append a new step to an existing plan.',
         '- "delete"    — Delete the plan entirely.',
-        '',
-        'Dual-writes: SQLite + .kontinue/plans/<slug>.md',
-        '',
-        'Step-level updates (step_done, step_skip, step_add) and status changes do NOT require user approval — they track execution progress.',
       ].join('\n'),
       inputSchema: {
         action:  z.enum(['add', 'status', 'step_done', 'step_skip', 'step_add', 'delete']),
@@ -1149,6 +1150,12 @@ export async function startMcpServer(cwd: string): Promise<void> {
         const match = allSteps.find(s => s.content.toLowerCase().includes(step.toLowerCase()))
         if (!match) return { content: [{ type: 'text' as const, text: `No step found matching: "${step}"${helpers}` }] }
         updatePlanStepStatus(match.id, action === 'step_done' ? 'done' : 'skipped')
+
+        // Auto-complete plan when all steps are done/skipped
+        const refreshedSteps = getPlanSteps(plan.id)
+        if (refreshedSteps.length > 0 && refreshedSteps.every(s => s.status === 'done' || s.status === 'skipped')) {
+          updatePlanStatus(plan.id, 'complete')
+        }
       } else if (action === 'delete') {
         deletePlanFile(cwd, plan)
         deletePlan(plan.id)

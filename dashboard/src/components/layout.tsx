@@ -3,13 +3,14 @@ import { useState, useEffect } from 'react'
 import {
   LayoutDashboard, KanbanSquare, Scale, Eye, Radio,
   FileText, Sun, Moon, Monitor, ChevronLeft, ChevronRight,
-  MessageSquare, GitBranch, Clock,
+  GitBranch, Clock, Activity, Building2, KeyRound,
 } from 'lucide-react'
 import { TooltipProvider } from '@/components/ui/tooltip'
-import { Badge } from '@/components/ui/badge'
 import { useTheme } from '@/components/theme-provider'
 import { NotificationPanel } from '@/components/notification-panel'
 import { SignalWidget } from '@/components/signal-widget'
+import { ProjectSwitcher } from '@/components/project-switcher'
+import { useDashboardStore } from '@/lib/store'
 import {
   Sidebar,
   SidebarContent,
@@ -26,7 +27,6 @@ import {
   SidebarSeparator,
   useSidebar,
 } from '@/components/ui/sidebar'
-import type { DashboardData } from '@/types'
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Overview' },
@@ -35,22 +35,22 @@ const navItems = [
   { to: '/observations', icon: Eye, label: 'Observations' },
   { to: '/signals', icon: Radio, label: 'Signals' },
   { to: '/plans', icon: FileText, label: 'Plans' },
+  { to: '/activity', icon: Activity, label: 'Activity' },
+  { to: '/workspace', icon: Building2, label: 'Workspace' },
+  { to: '/settings', icon: KeyRound, label: 'API Keys' },
 ]
 
-interface LayoutProps {
-  data: DashboardData | null
-  connected: boolean
-}
-
-function SidebarNav({ data }: { data: DashboardData | null }) {
+function SidebarNav() {
   const { state } = useSidebar()
   const collapsed = state === 'collapsed'
+  const data = useDashboardStore(s => s.data)
+  const pendingCount = data?.signals.pending.length ?? 0
 
   return (
     <SidebarMenu>
       {navItems.map((item) => {
         const Icon = item.icon
-        const pendingSignals = item.to === '/signals' ? (data?.signals.pending.length ?? 0) : 0
+        const pendingSignals = item.to === '/signals' ? pendingCount : 0
         return (
           <SidebarMenuItem key={item.to}>
             <SidebarMenuButton asChild tooltip={item.label}>
@@ -74,7 +74,7 @@ function SidebarNav({ data }: { data: DashboardData | null }) {
               </NavLink>
             </SidebarMenuButton>
             {pendingSignals > 0 && !collapsed && (
-              <SidebarMenuBadge className="bg-destructive text-destructive-foreground text-[10px] rounded-full px-1.5 min-w-[18px] h-[18px]">
+              <SidebarMenuBadge className="bg-destructive text-destructive-foreground text-[10px] rounded-full px-1.5 min-w-4.5 h-4.5">
                 {pendingSignals}
               </SidebarMenuBadge>
             )}
@@ -85,11 +85,12 @@ function SidebarNav({ data }: { data: DashboardData | null }) {
   )
 }
 
-function SidebarBrand({ data, connected }: { data: DashboardData | null; connected: boolean }) {
+function SessionInfo() {
   const { state } = useSidebar()
   const collapsed = state === 'collapsed'
+  const data = useDashboardStore(s => s.data)
+  const connected = useDashboardStore(s => s.connected)
 
-  // Live-updating session age
   const [sessionAge, setSessionAge] = useState(data?.session?.ageMin ?? 0)
   useEffect(() => {
     if (!data?.session) return
@@ -105,44 +106,36 @@ function SidebarBrand({ data, connected }: { data: DashboardData | null; connect
     return m > 0 ? `${h}h ${m}m` : `${h}h`
   }
 
+  if (!data || collapsed) return null
+
   return (
-    <>
-      <div className="flex items-center gap-2.5 px-2 pt-1">
-        <MessageSquare className="size-5 shrink-0 text-sidebar-primary" />
-        {!collapsed && (
-          <span className="font-bold text-base tracking-tight">Kontinue</span>
-        )}
+    <div className="px-3 pb-1 flex flex-col gap-1">
+      {/* Connection status */}
+      <div className="flex items-center gap-1.5">
+        <span
+          className={`size-[7px] rounded-full shrink-0 ${connected ? 'bg-emerald-500' : 'bg-red-500'}`}
+        />
+        <span className="text-[11px] opacity-60">{connected ? 'Connected' : 'Disconnected'}</span>
       </div>
-      {!collapsed && data && (
-        <div className="px-2 pb-1 flex flex-col gap-1.5">
-          {/* Project name + connection status */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-[13px] font-semibold">{data.project.name}</span>
-            <span
-              className={`size-[7px] rounded-full shrink-0 ${connected ? 'bg-emerald-500' : 'bg-red-500'}`}
-            />
-          </div>
-          {/* Git branch */}
-          {data.git.branch && (
-            <div className="flex items-center gap-1.5">
-              <GitBranch className="size-3 opacity-50 shrink-0" />
-              <span className="text-[11px] opacity-60 font-mono tracking-tight truncate">
-                {data.git.branch}
-              </span>
-            </div>
-          )}
-          {/* Session time + tool calls */}
-          {data.session && (
-            <div className="flex items-center gap-1.5">
-              <Clock className="size-3 opacity-50 shrink-0" />
-              <span className="text-[11px] opacity-60 tracking-tight">
-                Session: {formatAge(sessionAge)} · {data.session.toolCalls} calls
-              </span>
-            </div>
-          )}
+      {/* Git branch */}
+      {data.git.branch && (
+        <div className="flex items-center gap-1.5">
+          <GitBranch className="size-3 opacity-50 shrink-0" />
+          <span className="text-[11px] opacity-60 font-mono tracking-tight truncate">
+            {data.git.branch}
+          </span>
         </div>
       )}
-    </>
+      {/* Session time + tool calls */}
+      {data.session && (
+        <div className="flex items-center gap-1.5">
+          <Clock className="size-3 opacity-50 shrink-0" />
+          <span className="text-[11px] opacity-60 tracking-tight">
+            Session: {formatAge(sessionAge)} · {data.session.toolCalls} calls
+          </span>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -187,9 +180,11 @@ function SidebarCollapseToggle() {
   )
 }
 
-function HealthIndicator({ data }: { data: DashboardData | null }) {
+function HealthIndicator() {
   const { state } = useSidebar()
-  if (state === 'collapsed' || !data) return null
+  const collapsed = state === 'collapsed'
+  const data = useDashboardStore(s => s.data)
+  if (!data) return null
 
   const colorClass =
     data.health.level === 'good'
@@ -197,6 +192,21 @@ function HealthIndicator({ data }: { data: DashboardData | null }) {
       : data.health.level === 'fair'
         ? 'text-amber-400'
         : 'text-red-400'
+
+  const dotColor =
+    data.health.level === 'good'
+      ? 'bg-emerald-400'
+      : data.health.level === 'fair'
+        ? 'bg-amber-400'
+        : 'bg-red-400'
+
+  if (collapsed) {
+    return (
+      <div className="flex justify-center py-2 border-t border-sidebar-border">
+        <span className={`size-2 rounded-full ${dotColor}`} title={`Health: ${data.health.level}`} />
+      </div>
+    )
+  }
 
   return (
     <div
@@ -208,13 +218,18 @@ function HealthIndicator({ data }: { data: DashboardData | null }) {
   )
 }
 
-export function Layout({ data, connected }: LayoutProps) {
+export function Layout() {
   return (
     <TooltipProvider delayDuration={0}>
       <SidebarProvider defaultOpen={true}>
         <Sidebar collapsible="icon">
           <SidebarHeader>
-            <SidebarBrand data={data} connected={connected} />
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <ProjectSwitcher />
+              </SidebarMenuItem>
+            </SidebarMenu>
+            <SessionInfo />
           </SidebarHeader>
 
           <SidebarSeparator />
@@ -223,7 +238,7 @@ export function Layout({ data, connected }: LayoutProps) {
             <SidebarGroup>
               <SidebarGroupLabel>Navigation</SidebarGroupLabel>
               <SidebarGroupContent>
-                <SidebarNav data={data} />
+                <SidebarNav />
               </SidebarGroupContent>
             </SidebarGroup>
           </SidebarContent>
@@ -233,7 +248,7 @@ export function Layout({ data, connected }: LayoutProps) {
           <SidebarFooter>
             <SidebarMenu>
               <SidebarMenuItem>
-                <NotificationPanel data={data} />
+                <NotificationPanel />
               </SidebarMenuItem>
             </SidebarMenu>
             <SidebarSeparator />
@@ -241,12 +256,12 @@ export function Layout({ data, connected }: LayoutProps) {
             <SidebarCollapseToggle />
           </SidebarFooter>
 
-          <HealthIndicator data={data} />
+          <HealthIndicator />
         </Sidebar>
 
         <main className="flex-1 overflow-auto">
           <Outlet />
-          <SignalWidget data={data} />
+          <SignalWidget />
         </main>
       </SidebarProvider>
     </TooltipProvider>

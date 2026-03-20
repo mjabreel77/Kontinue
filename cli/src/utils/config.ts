@@ -6,6 +6,16 @@ export interface KontinueConfig {
   projectName?: string
   description?: string
   techStack?: string
+  /** 'local' (SQLite) or 'remote' (.NET backend) */
+  backend?: 'local' | 'remote'
+  /** Base URL of the .NET API server */
+  backendUrl?: string
+  /** Remote workspace GUID */
+  workspaceId?: string
+  /** Remote project GUID */
+  projectId?: string
+  /** @deprecated API key stored in OS keychain now — kept for backward compat */
+  apiKey?: string
 }
 
 const explorer = cosmiconfig('kontinue')
@@ -36,16 +46,23 @@ const AGENT_CONFIG_PATHS: Record<AgentTarget, string> = {
 }
 
 // Claude Code / Cursor / Windsurf use { mcpServers: { name: { command, args } } }
-const CLAUDE_MCP_ENTRY = {
-  command: 'kontinue',
-  args: ['mcp'],
+function buildMcpArgs(config?: KontinueConfig): string[] {
+  const args = ['mcp']
+  if (config?.backend === 'remote') {
+    args.push('--backend', 'remote')
+    if (config.backendUrl) args.push('--api-url', config.backendUrl)
+    if (config.projectId) args.push('--project-id', config.projectId)
+    if (config.apiKey) args.push('--api-key', config.apiKey)
+  }
+  return args
 }
 
 /**
  * Writes (or merges into) the MCP server config file for each selected AI agent.
  * Returns the list of relative paths that were written.
  */
-export function writeAgentMcpConfigs(cwd: string, agents: AgentTarget[]): string[] {
+export function writeAgentMcpConfigs(cwd: string, agents: AgentTarget[], config?: KontinueConfig): string[] {
+  const mcpArgs = buildMcpArgs(config)
   const written: string[] = []
   for (const agent of agents) {
     const relPath = AGENT_CONFIG_PATHS[agent]
@@ -64,12 +81,15 @@ export function writeAgentMcpConfigs(cwd: string, agents: AgentTarget[]): string
       servers['kontinue'] = {
         type: 'stdio',
         command: 'kontinue',
-        args: ['mcp', '--project', cwd],
+        args: [...mcpArgs, '--project', cwd],
       }
       existing['servers'] = servers
     } else {
       const mcpServers = (existing['mcpServers'] as Record<string, unknown> | undefined) ?? {}
-      mcpServers['kontinue'] = CLAUDE_MCP_ENTRY
+      mcpServers['kontinue'] = {
+        command: 'kontinue',
+        args: mcpArgs,
+      }
       existing['mcpServers'] = mcpServers
     }
 

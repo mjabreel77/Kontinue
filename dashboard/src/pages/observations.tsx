@@ -1,52 +1,77 @@
 import { useState } from 'react'
+import { Markdown } from '@/components/markdown'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import type { DashboardData, Observation } from '@/types'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Eye, Search, CheckCircle2 } from 'lucide-react'
+import type { Observation } from '@/types'
+import { useDashboardStore } from '@/lib/store'
 
-interface Props { data: DashboardData }
-
-export function ObservationsPage({ data }: Props) {
+export function ObservationsPage() {
+  const data = useDashboardStore(s => s.data)
   const [selected, setSelected] = useState<Observation | null>(null)
-  const active = data.observations.filter(o => !o.resolved_at)
-  const resolved = data.observations.filter(o => o.resolved_at)
+  const [search, setSearch] = useState('')
+
+  if (!data) return null
+
+  const lc = search.toLowerCase()
+  const filtered = data.observations.filter(o =>
+    !search || o.content.toLowerCase().includes(lc) || o.files?.some(f => f.toLowerCase().includes(lc))
+  )
+  const active = filtered.filter(o => !o.resolvedAt)
+  const resolved = filtered.filter(o => o.resolvedAt)
 
   return (
-    <div style={{ padding: 24, maxWidth: 1000, margin: '0 auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700, letterSpacing: -0.3 }}>Observations</h1>
-        <span style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, backgroundColor: 'var(--color-muted)', color: 'var(--color-muted-foreground)', fontWeight: 500 }}>
+    <div className="p-6 max-w-4xl mx-auto space-y-5">
+      <div className="flex items-center justify-between">
+        <h1 className="text-[22px] font-bold tracking-tight">Observations</h1>
+        <Badge variant="secondary" className="text-xs font-medium">
           {data.observations.length} total
-        </span>
+        </Badge>
+      </div>
+
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+        <Input
+          placeholder="Search observations..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="pl-9"
+        />
       </div>
 
       {active.length > 0 && (
-        <div style={{ marginBottom: 24 }}>
-          <h3 style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--color-muted-foreground)', marginBottom: 8 }}>
+        <section>
+          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
             Active ({active.length})
           </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="flex flex-col gap-2">
             {active.map(o => (
               <ObservationCard key={o.id} observation={o} onViewDetail={() => setSelected(o)} />
             ))}
           </div>
-        </div>
+        </section>
       )}
 
       {resolved.length > 0 && (
-        <div>
-          <h3 style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--color-muted-foreground)', marginBottom: 8 }}>
+        <section>
+          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
             Resolved ({resolved.length})
           </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div className="flex flex-col gap-2">
             {resolved.map(o => (
               <ObservationCard key={o.id} observation={o} resolved onViewDetail={() => setSelected(o)} />
             ))}
           </div>
-        </div>
+        </section>
       )}
 
-      {data.observations.length === 0 && (
-        <p style={{ textAlign: 'center', padding: '48px 0', fontSize: 13, color: 'var(--color-muted-foreground)' }}>No observations yet</p>
+      {filtered.length === 0 && (
+        <p className="text-center py-12 text-sm text-muted-foreground">
+          {search ? 'No observations match your search' : 'No observations yet'}
+        </p>
       )}
 
       {/* Detail Dialog */}
@@ -55,24 +80,33 @@ export function ObservationsPage({ data }: Props) {
           {selected && (
             <>
               <DialogHeader>
-                <DialogTitle style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: 13, color: 'var(--color-muted-foreground)' }}>#{selected.id}</span>
-                  Observation
-                  {selected.task_id && (
-                    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4, backgroundColor: 'var(--color-muted)', color: 'var(--color-muted-foreground)', fontWeight: 500 }}>
-                      Task #{selected.task_id}
-                    </span>
+                <DialogTitle className="flex items-center gap-2">
+                  <Eye className="size-4 text-amber-500" />
+                  <span className="text-sm text-muted-foreground">Observation</span>
+                  {selected.taskId && (
+                    <Badge variant="outline" className="text-[11px] font-medium">
+                      Task #{selected.taskId.slice(0, 8)}
+                    </Badge>
+                  )}
+                  {selected.resolvedAt && (
+                    <Badge variant="secondary" className="text-[11px]">
+                      <CheckCircle2 className="size-3 mr-1" /> Resolved
+                    </Badge>
                   )}
                 </DialogTitle>
               </DialogHeader>
               <ScrollArea className="max-h-[60vh] pr-4">
-                <p style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap', color: 'var(--color-foreground)' }}>
-                  {selected.content}
-                </p>
+                <Markdown>{selected.content}</Markdown>
+                {selected.files && selected.files.length > 0 && (
+                  <div className="mt-4 pt-3 border-t">
+                    <span className="text-[11px] font-medium text-muted-foreground">Files: </span>
+                    <span className="text-[12px] font-mono">{selected.files.join(', ')}</span>
+                  </div>
+                )}
               </ScrollArea>
-              <div style={{ borderTop: '1px solid var(--color-border)', paddingTop: 12, fontSize: 11, color: 'var(--color-muted-foreground)', display: 'flex', gap: 16 }}>
-                <span>Created: {new Date(selected.created_at + 'Z').toLocaleString()}</span>
-                {selected.resolved_at && <span>Resolved: {new Date(selected.resolved_at + 'Z').toLocaleString()}</span>}
+              <div className="border-t pt-3 text-[11px] text-muted-foreground flex gap-4">
+                <span>Created: {new Date(selected.createdAt).toLocaleString()}</span>
+                {selected.resolvedAt && <span>Resolved: {new Date(selected.resolvedAt).toLocaleString()}</span>}
               </div>
             </>
           )}
@@ -87,35 +121,28 @@ function ObservationCard({ observation: o, resolved, onViewDetail }: { observati
   const displayText = truncated ? o.content.slice(0, 180) + '…' : o.content
 
   return (
-    <div style={{
-      padding: '14px 16px', borderRadius: 8,
-      border: '1px solid var(--color-border)',
-      backgroundColor: 'var(--color-card)',
-      opacity: resolved ? 0.5 : 1,
-    }}>
-      <p style={{
-        fontSize: 13, lineHeight: 1.6,
-        color: 'var(--color-card-foreground)',
-        textDecoration: resolved ? 'line-through' : 'none',
-      }}>
+    <div className={`p-3.5 rounded-lg border bg-card ${resolved ? 'opacity-50' : ''}`}>
+      <p className={`text-sm leading-relaxed ${resolved ? 'line-through' : ''}`}>
         {displayText}
       </p>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8, fontSize: 11, color: 'var(--color-muted-foreground)' }}>
-        {o.task_id && <span>Task #{o.task_id}</span>}
-        <span>{new Date(o.created_at + 'Z').toLocaleDateString()}</span>
-        <button
+      <div className="flex items-center gap-3 mt-2 text-[11px] text-muted-foreground">
+        {o.taskId && (
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+            Task #{o.taskId.slice(0, 8)}
+          </Badge>
+        )}
+        {o.files && o.files.length > 0 && (
+          <span className="font-mono truncate max-w-[200px]">{o.files.join(', ')}</span>
+        )}
+        <span>{new Date(o.createdAt).toLocaleDateString()}</span>
+        <Button
+          variant="link"
+          size="sm"
           onClick={onViewDetail}
-          style={{
-            marginLeft: 'auto', fontSize: 11, fontWeight: 500,
-            color: 'var(--color-primary)', cursor: 'pointer',
-            border: 'none', background: 'none', padding: 0,
-            textDecoration: 'none',
-          }}
-          onMouseEnter={e => e.currentTarget.style.textDecoration = 'underline'}
-          onMouseLeave={e => e.currentTarget.style.textDecoration = 'none'}
+          className="ml-auto text-[11px] h-auto p-0 font-medium"
         >
           View details →
-        </button>
+        </Button>
       </div>
     </div>
   )

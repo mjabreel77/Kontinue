@@ -6,7 +6,13 @@
       "args": [
         "mcp",
         "--project",
-        "D:\\FY2026\\Workspace\\Mem"
+        "D:\\FY2026\\Workspace\\Mem",
+        "--backend",
+        "remote",
+        "--api-url",
+        "http://localhost:5152",
+        "--project-id",
+        "019d07f8-c5b7-7aee-a942-43f206518ede"
       ]
     }
   }

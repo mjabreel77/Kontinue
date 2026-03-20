@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Markdown } from '@/components/markdown'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,9 +20,8 @@ import {
 } from '@dnd-kit/core'
 import { CSS } from '@dnd-kit/utilities'
 import { addTask, updateTaskStatus } from '@/lib/api'
-import type { DashboardData, Task } from '@/types'
-
-interface Props { data: DashboardData }
+import type { Task } from '@/types'
+import { useDashboardStore } from '@/lib/store'
 
 const INITIAL_SHOW = 7
 
@@ -29,7 +29,7 @@ const INITIAL_SHOW = 7
 
 const colToStatus: Record<string, string> = {
   todo: 'todo',
-  inProgress: 'in-progress',
+  inProgress: 'inProgress',
   done: 'done',
 }
 
@@ -89,10 +89,11 @@ function TaskCardContent({ task, isStale, onClick, dragListeners, isOverlay }: {
 }) {
   const checkDone = task.items?.filter(i => i.done).length ?? 0
   const checkTotal = task.items?.length ?? 0
-  const hasBlockers = task.blockers && task.blockers.length > 0
+  const hasBlockers = task.blockedBy && task.blockedBy.length > 0
 
   return (
     <div
+      onClick={onClick}
       className={`group w-full text-left rounded-lg border bg-card px-3 py-2.5
         transition-all duration-150
         ${!isOverlay ? 'hover:shadow-sm hover:border-primary/30 cursor-pointer' : 'shadow-lg border-primary/40 rotate-1'}
@@ -105,6 +106,7 @@ function TaskCardContent({ task, isStale, onClick, dragListeners, isOverlay }: {
         <span
           {...(dragListeners || {})}
           className="cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground transition-colors -ml-0.5"
+          onClick={e => e.stopPropagation()}
         >
           <GripVertical className="size-3.5" />
         </span>
@@ -117,13 +119,13 @@ function TaskCardContent({ task, isStale, onClick, dragListeners, isOverlay }: {
             <AlertTriangle className="size-2.5 mr-0.5" /> blocked
           </Badge>
         )}
-        {task.external_url && (
+        {task.externalLinks && task.externalLinks.length > 0 && (
           <ExternalLink className="size-3 text-muted-foreground/50 ml-auto shrink-0" />
         )}
       </div>
 
-      {/* Title — clicking opens detail */}
-      <p className="text-[13px] font-medium leading-snug cursor-pointer" onClick={onClick}>{task.title}</p>
+      {/* Title */}
+      <p className="text-[13px] font-medium leading-snug">{task.title}</p>
 
       {/* Description preview */}
       {task.description && (
@@ -131,7 +133,7 @@ function TaskCardContent({ task, isStale, onClick, dragListeners, isOverlay }: {
       )}
 
       {/* Footer */}
-      {(checkTotal > 0 || task.updated_at) && (
+      {(checkTotal > 0 || task.updatedAt) && (
         <div className="mt-2 flex items-center gap-3">
           {checkTotal > 0 && (
             <div className="flex-1 min-w-0">
@@ -139,7 +141,7 @@ function TaskCardContent({ task, isStale, onClick, dragListeners, isOverlay }: {
             </div>
           )}
           <span className="text-[10px] text-muted-foreground/50 shrink-0 ml-auto">
-            {new Date(task.updated_at).toLocaleDateString()}
+            {new Date(task.updatedAt).toLocaleDateString()}
           </span>
         </div>
       )}
@@ -207,13 +209,13 @@ function MoveDialog({ task, targetCol, onConfirm, onCancel }: {
 function TaskDetail({ task }: { task: Task }) {
   const statusIcon = {
     'todo': <Circle className="size-4 text-muted-foreground" />,
-    'in-progress': <Loader2 className="size-4 text-primary animate-spin" />,
+    'inProgress': <Loader2 className="size-4 text-primary animate-spin" />,
     'done': <CheckCircle2 className="size-4 text-primary" />,
     'abandoned': <XCircle className="size-4 text-destructive" />,
   }[task.status] || null
 
   const statusBadgeVariant: 'default' | 'success' | 'destructive' | 'secondary' =
-    task.status === 'in-progress' ? 'default' :
+    task.status === 'inProgress' ? 'default' :
     task.status === 'done' ? 'success' :
     task.status === 'abandoned' ? 'destructive' : 'secondary'
 
@@ -224,8 +226,8 @@ function TaskDetail({ task }: { task: Task }) {
           {statusIcon}
           <span className="text-muted-foreground text-sm font-mono">#{task.id}</span>
           <span className="truncate">{task.title}</span>
-          {task.external_url && (
-            <a href={task.external_url} target="_blank" rel="noopener noreferrer" className="shrink-0" onClick={e => e.stopPropagation()}>
+          {task.externalLinks && task.externalLinks.length > 0 && (
+            <a href={task.externalLinks[0].externalUrl ?? '#'} target="_blank" rel="noopener noreferrer" className="shrink-0" onClick={e => e.stopPropagation()}>
               <ExternalLink className="size-3.5 text-muted-foreground hover:text-foreground transition-colors" />
             </a>
           )}
@@ -233,8 +235,8 @@ function TaskDetail({ task }: { task: Task }) {
         <DialogDescription asChild>
           <div className="flex items-center gap-2 pt-1">
             <Badge variant={statusBadgeVariant} className="text-[11px]">{task.status}</Badge>
-            {task.external_ref && (
-              <Badge variant="outline" className="text-[10px] font-mono">{task.external_ref}</Badge>
+            {task.externalLinks && task.externalLinks.length > 0 && (
+              <Badge variant="outline" className="text-[10px] font-mono">{task.externalLinks?.[0]?.externalId}</Badge>
             )}
           </div>
         </DialogDescription>
@@ -244,13 +246,19 @@ function TaskDetail({ task }: { task: Task }) {
         {task.description && (
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Description</h4>
-            <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{task.description}</p>
+            <Markdown>{task.description}</Markdown>
           </div>
         )}
         {task.outcome && (
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Outcome</h4>
-            <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">{task.outcome}</p>
+            <Markdown className="text-muted-foreground">{task.outcome}</Markdown>
+          </div>
+        )}
+        {task.notes && (
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Notes</h4>
+            <Markdown className="text-muted-foreground">{task.notes}</Markdown>
           </div>
         )}
         {task.items && task.items.length > 0 && (
@@ -272,31 +280,27 @@ function TaskDetail({ task }: { task: Task }) {
             </div>
           </div>
         )}
-        {task.blockers && task.blockers.length > 0 && (
+        {task.blockedBy && task.blockedBy.length > 0 && (
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wide text-destructive mb-1.5 flex items-center gap-1.5">
               <AlertTriangle className="size-3.5" /> Blocked by
             </h4>
             <div className="space-y-1">
-              {task.blockers.map(b => (
-                <div key={b.id} className="flex items-center gap-2 text-[13px]">
-                  <span className="text-muted-foreground font-mono text-[11px]">#{b.id}</span>
-                  <span>{b.title}</span>
-                  <Badge variant="secondary" className="text-[9px] ml-auto">{b.status}</Badge>
+              {task.blockedBy.map(b => (
+                <div key={b.blockedByTaskId} className="flex items-center gap-2 text-[13px]">
+                  <span className="text-muted-foreground font-mono text-[11px]">#{b.blockedByTaskId.slice(0, 8)}</span>
                 </div>
               ))}
             </div>
           </div>
         )}
-        {task.blocking && task.blocking.length > 0 && (
+        {task.blocks && task.blocks.length > 0 && (
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Blocking</h4>
             <div className="space-y-1">
-              {task.blocking.map(b => (
-                <div key={b.id} className="flex items-center gap-2 text-[13px]">
-                  <span className="text-muted-foreground font-mono text-[11px]">#{b.id}</span>
-                  <span>{b.title}</span>
-                  <Badge variant="secondary" className="text-[9px] ml-auto">{b.status}</Badge>
+              {task.blocks.map(b => (
+                <div key={b.taskId} className="flex items-center gap-2 text-[13px]">
+                  <span className="text-muted-foreground font-mono text-[11px]">#{b.taskId.slice(0, 8)}</span>
                 </div>
               ))}
             </div>
@@ -304,8 +308,8 @@ function TaskDetail({ task }: { task: Task }) {
         )}
         <Separator />
         <div className="flex justify-between text-[11px] text-muted-foreground">
-          <span>Created {new Date(task.created_at).toLocaleString()}</span>
-          <span>Updated {new Date(task.updated_at).toLocaleString()}</span>
+          <span>Created {new Date(task.createdAt).toLocaleString()}</span>
+          <span>Updated {new Date(task.updatedAt).toLocaleString()}</span>
         </div>
       </div>
     </DialogContent>
@@ -314,7 +318,8 @@ function TaskDetail({ task }: { task: Task }) {
 
 /* ── Board Page ────────────────────────────────────────────── */
 
-export function BoardPage({ data }: Props) {
+export function BoardPage() {
+  const data = useDashboardStore(s => s.data)
   const [fullscreen, setFullscreen] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [title, setTitle] = useState('')
@@ -329,6 +334,8 @@ export function BoardPage({ data }: Props) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
   )
+
+  if (!data) return null
 
   const staleIds = new Set(data.staleTasks.map(t => t.id))
 
@@ -346,14 +353,14 @@ export function BoardPage({ data }: Props) {
 
   const columns = [
     { key: 'todo', label: 'Todo', status: 'todo', tasks: data.tasks.todo },
-    { key: 'inProgress', label: 'In Progress', status: 'in-progress', tasks: data.tasks.inProgress },
+    { key: 'inProgress', label: 'In Progress', status: 'inProgress', tasks: data.tasks.inProgress },
     { key: 'done', label: 'Done', status: 'done', tasks: data.tasks.done },
   ]
 
   const totalTasks = columns.reduce((sum, c) => sum + c.tasks.length, 0)
 
   // Find which column a task currently belongs to
-  const findTaskColumn = (taskId: number): string | null => {
+  const findTaskColumn = (taskId: string): string | null => {
     for (const col of columns) {
       if (col.tasks.some(t => t.id === taskId)) return col.key
     }

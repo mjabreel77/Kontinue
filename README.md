@@ -18,7 +18,12 @@ Works with **GitHub Copilot (VS Code)**, **Claude Code**, **Cursor**, and **Wind
 
 ## How It Works
 
-Kontinue runs as a local MCP server that your AI agent connects to. The agent is given operating instructions through `kontinue setup` — these tell it exactly when and how to use each tool, so the behavior is automatic, not prompted.
+Kontinue runs as an MCP server that your AI agent connects to. It supports two backend modes:
+
+- **Local** (default) — SQLite + markdown files, zero dependencies, works offline
+- **Remote** — .NET API server with PostgreSQL + Qdrant vector search, multi-workspace support, real-time WebSocket dashboard
+
+The agent is given operating instructions through `kontinue setup` — these tell it exactly when and how to use each tool, so the behavior is automatic, not prompted.
 
 **Every session follows the same contract:**
 
@@ -28,7 +33,7 @@ Kontinue runs as a local MCP server that your AI agent connects to. The agent is
 
 **Switch agents at any point.** A new agent — different tool, different model, next day — calls `read_context` and resumes exactly where the previous one stopped. No re-briefing, no lost context.
 
-Everything is dual-written: SQLite (queryable, fast) + `.kontinue/*.md` files (human-readable, Obsidian-browsable, git-committable).
+**Local mode** dual-writes: SQLite (queryable, fast) + `.kontinue/*.md` files (human-readable, Obsidian-browsable, git-committable).
 
 ```
 ~/.kontinue/kontinue.db           ← global DB, all projects keyed by path
@@ -39,6 +44,8 @@ Everything is dual-written: SQLite (queryable, fast) + `.kontinue/*.md` files (h
   sessions/YYYY-MM-DD-HH-MM.md   ← session handoffs
   notes/                          ← observations and free-form notes
 ```
+
+**Remote mode** stores everything in PostgreSQL with Qdrant for vector/hybrid search, served via .NET Aspire.
 
 
 
@@ -67,8 +74,14 @@ npm link
 ## Quick Start
 
 ```bash
-# In your project directory:
+# Local mode (default — SQLite, zero dependencies):
 kontinue init          # initialize memory, configure your AI agent
+kontinue start         # start a session (shows last handoff + open tasks)
+```
+
+```bash
+# Remote mode (.NET backend + PostgreSQL):
+kontinue init --backend=remote --api-url=http://localhost:5152
 kontinue start         # start a session (shows last handoff + open tasks)
 
 # During work (the agent does most of this automatically):
@@ -84,8 +97,38 @@ kontinue status        # current session, tasks, recent decisions
 kontinue board         # visual task board (Todo / In Progress / Done)
 kontinue log           # full decision log with rationale and context
 kontinue search auth   # search all memory for "auth"
-kontinue web           # open local dashboard in the browser
 ```
+
+---
+
+## Authentication
+
+Remote mode uses token-based authentication. Two token types:
+
+- **Session tokens** (`kns_*`) — created via browser login, 30-day expiry, full user access
+- **API keys** (`knt_*`) — created per-project, scoped via grants, used by MCP servers and automation
+
+```bash
+# Log in via browser (stores session token in encrypted credential store)
+kontinue auth login
+
+# Create a project-scoped API key (stored in credential store, used by MCP)
+kontinue auth create
+
+# Check current auth status
+kontinue auth status
+
+# List your API keys
+kontinue auth list
+
+# Revoke a key
+kontinue auth revoke <key-id>
+
+# Rotate: revoke current key and create a new one
+kontinue auth rotate
+```
+
+Credentials are stored in `~/.config/kontinue/credentials.enc` (AES-256-GCM encrypted). The MCP server resolves credentials automatically: API key from credential store → session token → config fallback.
 
 ---
 
@@ -110,25 +153,31 @@ The agent calls `acknowledge_signal` once it has acted on the signal.
 
 ---
 
-## Web Dashboard
+## Dashboard
+
+The Kontinue Dashboard is a standalone Electron + React app that connects to the .NET API server via WebSocket for real-time updates.
 
 ```bash
-kontinue web           # starts on http://localhost:3131 by default
-kontinue web --port 8080
+# Start the .NET API server (via Aspire):
+cd server && dotnet run --project src/Kontinue.AppHost
+
+# Start the dashboard:
+cd dashboard && npm run electron:dev
 ```
 
-A real-time dashboard built with a shadcn/ui-inspired design system (Inter font, zinc palette, CSS variables, `color-mix()` theming). Features:
+Features:
 
-- **Kanban task board** — Todo / In Progress / Done columns with card count badges, stale task indicators, and a fullscreen mode for focused triage
-- **Task detail modal** — click any card to see the full description, outcome, timestamps, and linked items
-- **Top-7 + Show more** — columns show the 7 most recent tasks by default with a toggle to expand
-- **Signal bar** — send messages, priorities, or abort signals to the active agent directly from the browser
+- **Kanban task board** — Todo / In Progress / Done columns with drag grip, card count badges, stale task indicators
+- **Task detail modal** — full description, outcome, timestamps, notes with markdown rendering
+- **Signal widget** — send messages, priorities, or abort signals to the active agent
 - **Signal history** — filterable log of all signals with type, status, and source filters
-- **Activity feed** — pending signals highlighted, session replay, checkpoint timeline
-- **Session replay** — step through past session checkpoints and decisions
-- **Dark mode** — toggle between light and dark themes with full variable-driven theming
-- **Live refresh** — auto-updates via Server-Sent Events every 2 seconds
-- **+ Add Task** — create tasks directly from the dashboard toolbar
+- **Activity feed** — checkpoints, tasks, decisions, signals merged chronologically
+- **Plans view** — multi-step plans with step status tracking
+- **Decisions & observations** — full rationale, alternatives, and context with markdown rendering
+- **Multi-workspace overview** — aggregate health stats across all projects
+- **Project switching** — connect to any workspace/project on the server
+- **Dark mode** — toggle between light and dark themes
+- **Real-time updates** — WebSocket-driven, no polling
 
 ---
 
@@ -257,7 +306,7 @@ kontinue status                      Current session, tasks, decisions
 kontinue board                       Visual task board
 kontinue log                         Full decision log
 kontinue search <query>              Search all memory
-kontinue web [--port <n>]            Start local web dashboard
+kontinue sync                        Sync local data to remote backend
 
 kontinue task add <title>            Add a task
 kontinue task list                   List all tasks
@@ -279,17 +328,38 @@ kontinue signal <content>            Send a signal to the active agent
                                      (--type message|priority|abort|answer)
                                      (--question <partial> for --type answer)
 
+kontinue auth login                  Authenticate via browser login
+kontinue auth create                 Create a project-scoped API key
+kontinue auth status                 Show current auth status
+kontinue auth list                   List your API keys
+kontinue auth revoke <id>            Revoke an API key
+kontinue auth rotate                 Revoke + create new key
+
 kontinue doctor                      Audit memory quality — missing rationale, handoffs
-kontinue mcp [--project <path>]      Start MCP server (used by agents, not humans)
+kontinue mcp [--project <path>]      Start MCP server (local mode)
+kontinue mcp --backend=remote        Start MCP server (remote mode, reads config from .kontinuerc.json)
+kontinue export                      Export decisions, tasks, handoffs, observations
 ```
 
 ---
 
-## Why Dual-Write?
+## Architecture
 
-The SQLite DB enables fast, structured queries by the MCP server. The `.kontinue/` markdown files give you a human-readable audit trail you can browse in Obsidian, commit to git, or diff in code review.
+### Local mode
+SQLite + markdown files. The MCP server reads/writes directly. Zero dependencies beyond Node.js.
 
-Neither replaces the other.
+### Remote mode
+- **.NET Aspire** orchestrates the backend (API, Worker, MigrationService)
+- **PostgreSQL** for structured data (tasks, decisions, sessions, plans, observations, signals)
+- **Qdrant** for vector embeddings and hybrid search (semantic + keyword via tsvector)
+- **WebSocket** for real-time event streaming to the dashboard
+- **Token-based auth** — session tokens (`kns_*`) for user access, API keys (`knt_*`) for project-scoped MCP/automation access, with middleware-enforced workspace membership checks
+
+The CLI's `--backend=remote` flag routes all MCP tool calls through the `.NET API` instead of local SQLite. Configuration is stored in `.kontinuerc.json`.
+
+### Why dual-write? (local mode)
+
+The SQLite DB enables fast, structured queries. The `.kontinue/` markdown files give you a human-readable audit trail you can browse in Obsidian, commit to git, or diff in code review. Neither replaces the other.
 
 ---
 

@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Kontinue.MigrationService": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    }
+  }
+}

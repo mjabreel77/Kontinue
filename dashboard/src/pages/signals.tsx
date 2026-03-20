@@ -10,15 +10,16 @@ import {
 } from '@/components/ui/select'
 import { Send, AlertTriangle } from 'lucide-react'
 import { sendSignal, acknowledgeSignal } from '@/lib/api'
-import type { DashboardData } from '@/types'
+import { useDashboardStore } from '@/lib/store'
 
-interface Props { data: DashboardData }
-
-export function SignalsPage({ data }: Props) {
+export function SignalsPage() {
+  const data = useDashboardStore(s => s.data)
   const [message, setMessage] = useState('')
   const [type, setType] = useState('message')
   const [filterType, setFilterType] = useState('all')
   const [filterStatus, setFilterStatus] = useState('all')
+
+  if (!data) return null
 
   const handleSend = async () => {
     if (!message.trim()) return
@@ -78,7 +79,7 @@ export function SignalsPage({ data }: Props) {
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <Badge variant="warning" className="text-[10px]">{s.type}</Badge>
-                    <span className="text-xs text-muted-foreground">{new Date(s.created_at).toLocaleString()}</span>
+                    <span className="text-xs text-muted-foreground">{new Date(s.createdAt).toLocaleString()}</span>
                   </div>
                   <p className="text-sm mt-1">{s.content}</p>
                 </div>
@@ -139,8 +140,8 @@ export function SignalsPage({ data }: Props) {
                         {s.status}
                       </Badge>
                       <span>{s.source}</span>
-                      <span>{new Date(s.created_at).toLocaleString()}</span>
-                      {s.acknowledged_at && <span>· ack {new Date(s.acknowledged_at).toLocaleString()}</span>}
+                      <span>{new Date(s.createdAt).toLocaleString()}</span>
+                      {s.acknowledgedAt && <span>· ack {new Date(s.acknowledgedAt).toLocaleString()}</span>}
                     </div>
                   </div>
                 </div>

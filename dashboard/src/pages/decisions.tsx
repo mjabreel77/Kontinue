@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Markdown } from '@/components/markdown'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -9,24 +10,26 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog'
 import { Search, ChevronRight } from 'lucide-react'
-import type { DashboardData, Decision } from '@/types'
+import type { Decision } from '@/types'
+import { useDashboardStore } from '@/lib/store'
 
-interface Props { data: DashboardData }
-
-export function DecisionsPage({ data }: Props) {
+export function DecisionsPage() {
+  const data = useDashboardStore(s => s.data)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Decision | null>(null)
+
+  if (!data) return null
 
   const filtered = data.decisions.filter(d => {
     if (!search) return true
     const q = search.toLowerCase()
     return d.summary.toLowerCase().includes(q) ||
-      d.tags?.toLowerCase().includes(q) ||
+      d.tags?.some(t => t.toLowerCase().includes(q)) ||
       d.rationale?.toLowerCase().includes(q)
   })
 
-  const active = filtered.filter(d => !d.superseded_by)
-  const superseded = filtered.filter(d => d.superseded_by)
+  const active = filtered.filter(d => !d.supersededById)
+  const superseded = filtered.filter(d => d.supersededById)
 
   return (
     <div className="p-6 space-y-4">
@@ -76,9 +79,9 @@ export function DecisionsPage({ data }: Props) {
               <DialogHeader>
                 <DialogTitle>{selected.summary}</DialogTitle>
                 <DialogDescription>
-                  {new Date(selected.created_at).toLocaleDateString()} · #{selected.id}
-                  {selected.superseded_by && (
-                    <Badge variant="destructive" className="ml-2 text-[10px]">superseded by #{selected.superseded_by}</Badge>
+                  {new Date(selected.createdAt).toLocaleDateString()} · #{selected.id.slice(0, 8)}
+                  {selected.supersededById && (
+                    <Badge variant="destructive" className="ml-2 text-[10px]">superseded</Badge>
                   )}
                 </DialogDescription>
               </DialogHeader>
@@ -86,31 +89,33 @@ export function DecisionsPage({ data }: Props) {
                 {selected.rationale && (
                   <div>
                     <h4 className="font-medium mb-1">Rationale</h4>
-                    <p className="text-muted-foreground whitespace-pre-wrap">{selected.rationale}</p>
+                    <Markdown className="text-muted-foreground">{selected.rationale}</Markdown>
                   </div>
                 )}
-                {selected.alternatives && (
+                {selected.alternatives && selected.alternatives.length > 0 && (
                   <div>
                     <h4 className="font-medium mb-1">Alternatives Considered</h4>
-                    <p className="text-muted-foreground whitespace-pre-wrap">{selected.alternatives}</p>
+                    <ul className="list-disc list-inside text-muted-foreground">
+                      {selected.alternatives.map((a, i) => <li key={i}>{a}</li>)}
+                    </ul>
                   </div>
                 )}
                 {selected.context && (
                   <div>
                     <h4 className="font-medium mb-1">Context</h4>
-                    <p className="text-muted-foreground whitespace-pre-wrap">{selected.context}</p>
+                    <Markdown className="text-muted-foreground">{selected.context}</Markdown>
                   </div>
                 )}
-                {selected.files && (
+                {selected.files && selected.files.length > 0 && (
                   <div>
                     <h4 className="font-medium mb-1">Files</h4>
-                    <p className="text-xs text-muted-foreground font-mono">{selected.files}</p>
+                    <p className="text-xs text-muted-foreground font-mono">{selected.files.join(', ')}</p>
                   </div>
                 )}
-                {selected.tags && (
+                {selected.tags && selected.tags.length > 0 && (
                   <div className="flex flex-wrap gap-1">
-                    {selected.tags.split(',').map(t => (
-                      <Badge key={t.trim()} variant="outline" className="text-[10px]">{t.trim()}</Badge>
+                    {selected.tags.map(t => (
+                      <Badge key={t} variant="outline" className="text-[10px]">{t}</Badge>
                     ))}
                   </div>
                 )}
@@ -138,10 +143,10 @@ function DecisionCard({ decision, onClick, dimmed }: { decision: Decision; onCli
             )}
             <div className="flex items-center gap-2 mt-2">
               <span className="text-[10px] text-muted-foreground">
-                {new Date(decision.created_at).toLocaleDateString()}
+                {new Date(decision.createdAt).toLocaleDateString()}
               </span>
-              {decision.tags && decision.tags.split(',').slice(0, 3).map(t => (
-                <Badge key={t.trim()} variant="outline" className="text-[9px] py-0">{t.trim()}</Badge>
+              {decision.tags && decision.tags.length > 0 && decision.tags.slice(0, 3).map(t => (
+                <Badge key={t} variant="outline" className="text-[9px] py-0">{t}</Badge>
               ))}
             </div>
           </div>

@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Kontinue.Api/Kontinue.Api.csproj" />
+    <Project Path="src/Kontinue.AppHost/Kontinue.AppHost.csproj" />
+    <Project Path="src/Kontinue.MigrationService/Kontinue.MigrationService.csproj" />
+    <Project Path="src/Kontinue.ServiceDefaults/Kontinue.ServiceDefaults.csproj" />
+    <Project Path="src/Kontinue.Shared/Kontinue.Shared.csproj" />
+    <Project Path="src/Kontinue.Worker/Kontinue.Worker.csproj" />
+  </Folder>
+</Solution>

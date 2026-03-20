@@ -3,11 +3,12 @@ import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { CheckCircle2, Circle, SkipForward } from 'lucide-react'
-import type { DashboardData, Plan } from '@/types'
+import type { Plan } from '@/types'
+import { useDashboardStore } from '@/lib/store'
 
-interface Props { data: DashboardData }
-
-export function PlansPage({ data }: Props) {
+export function PlansPage() {
+  const data = useDashboardStore(s => s.data)
+  if (!data) return null
   const active = data.plans.filter(p => p.status === 'active')
   const completed = data.plans.filter(p => p.status === 'complete')
   const other = data.plans.filter(p => p.status !== 'active' && p.status !== 'complete')
@@ -75,7 +76,7 @@ function PlanCard({ plan }: { plan: Plan }) {
 
         {/* Steps */}
         <div className="space-y-2">
-          {plan.steps.sort((a, b) => a.step_order - b.step_order).map(step => (
+          {plan.steps.sort((a, b) => a.position - b.position).map(step => (
             <div key={step.id} className="flex items-center gap-2 text-sm">
               {step.status === 'done' ? (
                 <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
@@ -93,8 +94,8 @@ function PlanCard({ plan }: { plan: Plan }) {
 
         <Separator className="my-3" />
         <div className="flex justify-between text-[10px] text-muted-foreground">
-          <span>Created: {new Date(plan.created_at).toLocaleDateString()}</span>
-          <span>Updated: {new Date(plan.updated_at).toLocaleDateString()}</span>
+          <span>Created: {new Date(plan.createdAt).toLocaleDateString()}</span>
+          <span>&nbsp;</span>
         </div>
       </CardContent>
     </Card>

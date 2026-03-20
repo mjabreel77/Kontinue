@@ -1,11 +1,12 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Bell, CheckCircle2, Scale, Eye, FileText, Radio, Clock, Zap, MessageSquare, AlertTriangle } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetTrigger } from '@/components/ui/sheet'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { SidebarMenuButton, useSidebar } from '@/components/ui/sidebar'
-import type { DashboardData } from '@/types'
+import { useDashboardStore } from '@/lib/store'
 
 const typeIcons: Record<string, React.ReactNode> = {
   task: <CheckCircle2 className="size-3.5 text-blue-500 shrink-0" />,
@@ -18,6 +19,17 @@ const typeIcons: Record<string, React.ReactNode> = {
   session: <MessageSquare className="size-3.5 text-slate-400 shrink-0" />,
 }
 
+const typeRoutes: Record<string, string> = {
+  task: '/board',
+  decision: '/decisions',
+  observation: '/observations',
+  signal: '/signals',
+  plan: '/plans',
+  checkpoint: '/',
+  handoff: '/',
+  session: '/',
+}
+
 function timeAgo(ts: string): string {
   const diff = Date.now() - new Date(ts).getTime()
   const mins = Math.floor(diff / 60000)
@@ -28,16 +40,22 @@ function timeAgo(ts: string): string {
   return `${Math.floor(hours / 24)}d ago`
 }
 
-interface Props {
-  data: DashboardData | null
-}
-
-export function NotificationPanel({ data }: Props) {
+export function NotificationPanel() {
   const [open, setOpen] = useState(false)
+  const navigate = useNavigate()
   const { state } = useSidebar()
   const collapsed = state === 'collapsed'
+  const data = useDashboardStore(s => s.data)
   const activities = data?.activity ?? []
   const count = activities.length
+
+  const handleClick = (type: string) => {
+    const route = typeRoutes[type]
+    if (route) {
+      setOpen(false)
+      navigate(route)
+    }
+  }
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -86,9 +104,10 @@ export function NotificationPanel({ data }: Props) {
           ) : (
             <div className="flex flex-col">
               {activities.map((item, i) => (
-                <div
+                <button
                   key={i}
-                  className="flex items-start gap-3 px-6 py-3 border-b border-border/40 last:border-0 hover:bg-muted/40 transition-colors"
+                  onClick={() => handleClick(item.type)}
+                  className="flex items-start gap-3 px-6 py-3 border-b border-border/40 last:border-0 hover:bg-muted/40 transition-colors text-left cursor-pointer"
                 >
                   <div className="mt-0.5">
                     {typeIcons[item.type] || <AlertTriangle className="size-3.5 text-slate-400 shrink-0" />}
@@ -100,7 +119,7 @@ export function NotificationPanel({ data }: Props) {
                       <span className="text-[10px] text-muted-foreground/60 capitalize">{item.type}</span>
                     </div>
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           )}

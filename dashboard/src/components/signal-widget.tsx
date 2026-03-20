@@ -6,7 +6,8 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { sendSignal, acknowledgeSignal } from '@/lib/api'
-import type { DashboardData, Signal } from '@/types'
+import { useDashboardStore } from '@/lib/store'
+import type { Signal } from '@/types'
 
 const typeIcons: Record<string, React.ReactNode> = {
   message: <MessageSquare className="size-3.5" />,
@@ -23,17 +24,13 @@ const typeColors: Record<string, string> = {
 }
 
 function timeAgo(ts: string): string {
-  const diff = Date.now() - new Date(ts + 'Z').getTime()
+  const diff = Date.now() - new Date(ts).getTime()
   const mins = Math.floor(diff / 60000)
   if (mins < 1) return 'now'
   if (mins < 60) return `${mins}m`
   const hours = Math.floor(mins / 60)
   if (hours < 24) return `${hours}h`
   return `${Math.floor(hours / 24)}d`
-}
-
-interface Props {
-  data: DashboardData | null
 }
 
 const typeBadgeColors: Record<string, string> = {
@@ -50,7 +47,7 @@ const statusColors: Record<string, string> = {
 }
 
 function timeDiff(from: string, to: string): string {
-  const diff = new Date(to + 'Z').getTime() - new Date(from + 'Z').getTime()
+  const diff = new Date(to).getTime() - new Date(from).getTime()
   const secs = Math.round(diff / 1000)
   if (secs < 60) return `${secs}s`
   return `${Math.round(secs / 60)}m`
@@ -58,7 +55,7 @@ function timeDiff(from: string, to: string): string {
 
 /* ── Signal entry: type badge + message + metadata + nested agent reply ── */
 
-function SignalEntry({ signal, onAck }: { signal: Signal; onAck: (id: number) => void }) {
+function SignalEntry({ signal, onAck }: { signal: Signal; onAck: (id: string) => void }) {
   const isAcked = signal.status === 'acknowledged'
 
   return (
@@ -85,33 +82,33 @@ function SignalEntry({ signal, onAck }: { signal: Signal; onAck: (id: number) =>
           <p className="text-[13px] leading-relaxed">{signal.content}</p>
           {/* Metadata row */}
           <div className="flex items-center gap-1.5 mt-1.5 text-[10px] text-muted-foreground">
-            <span>{timeAgo(signal.created_at)}</span>
+            <span>{timeAgo(signal.createdAt)}</span>
             <span className="opacity-40">·</span>
             <span className="capitalize">{signal.source}</span>
             <span className="opacity-40">·</span>
             <span className={statusColors[signal.status] || 'text-muted-foreground'}>{signal.status}</span>
-            {signal.delivered_at && (
+            {signal.deliveredAt && (
               <>
                 <span className="opacity-40">·</span>
-                <span title="Time to deliver">{timeDiff(signal.created_at, signal.delivered_at)}</span>
+                <span title="Time to deliver">{timeDiff(signal.createdAt, signal.deliveredAt)}</span>
               </>
             )}
-            {signal.acknowledged_at && (
+            {signal.acknowledgedAt && (
               <>
                 <span className="opacity-40">·</span>
-                <span title="Time to acknowledge">{timeDiff(signal.delivered_at || signal.created_at, signal.acknowledged_at)}</span>
+                <span title="Time to acknowledge">{timeDiff(signal.deliveredAt || signal.createdAt, signal.acknowledgedAt)}</span>
               </>
             )}
           </div>
 
           {/* Agent reply — indented with left border */}
-          {signal.agent_response && (
+          {signal.agentResponse && (
             <div className="mt-2.5 ml-0.5 pl-3 border-l-2 border-violet-300 dark:border-violet-700">
               <div className="flex items-center gap-1.5 mb-1">
                 <Bot className="size-3 text-violet-500" />
                 <span className="text-[10px] font-semibold text-violet-600 dark:text-violet-400">Agent reply</span>
               </div>
-              <p className="text-[13px] leading-relaxed text-muted-foreground">{signal.agent_response}</p>
+              <p className="text-[13px] leading-relaxed text-muted-foreground">{signal.agentResponse}</p>
             </div>
           )}
         </div>
@@ -120,7 +117,7 @@ function SignalEntry({ signal, onAck }: { signal: Signal; onAck: (id: number) =>
   )
 }
 
-export function SignalWidget({ data }: Props) {
+export function SignalWidget() {
   const [expanded, setExpanded] = useState(false)
   const [message, setMessage] = useState('')
   const [signalType, setSignalType] = useState<'message' | 'priority'>('message')
@@ -128,9 +125,9 @@ export function SignalWidget({ data }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
-  const signals = data?.signals ?? { recent: [], pending: [] }
-  const allSignals = signals.recent
-  const pendingCount = signals.pending.length
+  const data = useDashboardStore(s => s.data)
+  const allSignals = data?.signals.recent ?? []
+  const pendingCount = data?.signals.pending.length ?? 0
 
   // Auto-scroll to bottom on new signals when expanded
   useEffect(() => {
@@ -156,7 +153,7 @@ export function SignalWidget({ data }: Props) {
     }
   }
 
-  const handleAck = async (id: number) => {
+  const handleAck = async (id: string) => {
     await acknowledgeSignal(id)
   }
 

@@ -1,0 +1,23 @@
+<Project Sdk="Aspire.AppHost.Sdk/13.1.1">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <UserSecretsId>1274165d-062c-4a27-ba6b-cb6b8f777d50</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.JavaScript" Version="13.1.3" />
+    <PackageReference Include="Aspire.Hosting.PostgreSQL" Version="13.1.3" />
+    <PackageReference Include="Aspire.Hosting.Qdrant" Version="13.1.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Kontinue.Api\Kontinue.Api.csproj" />
+    <ProjectReference Include="..\Kontinue.MigrationService\Kontinue.MigrationService.csproj" />
+    <ProjectReference Include="..\Kontinue.Worker\Kontinue.Worker.csproj" />
+  </ItemGroup>
+
+</Project>

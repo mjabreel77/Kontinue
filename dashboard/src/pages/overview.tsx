@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Markdown } from '@/components/markdown'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
@@ -10,8 +11,7 @@ import {
   CheckCircle2, ArrowRight, CircleDot,
 } from 'lucide-react'
 import type { DashboardData, Plan } from '@/types'
-
-interface Props { data: DashboardData }
+import { useDashboardStore } from '@/lib/store'
 
 /* ── Stat Cards ─────────────────────────────────────────────── */
 
@@ -38,7 +38,7 @@ function StatCard({ label, value, sub, icon: Icon, accent }: {
 
 /* ── Session Card ───────────────────────────────────────────── */
 
-function SessionCard({ data }: Props) {
+function SessionCard({ data }: { data: DashboardData }) {
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -70,7 +70,7 @@ function SessionCard({ data }: Props) {
 
 /* ── Checkpoint Card ────────────────────────────────────────── */
 
-function CheckpointCard({ data }: Props) {
+function CheckpointCard({ data }: { data: DashboardData }) {
   const cp = data.checkpoint
   const stale = cp && cp.ageMin > 30
   return (
@@ -87,13 +87,13 @@ function CheckpointCard({ data }: Props) {
             <Badge variant={stale ? 'destructive' : 'secondary'} className="text-[10px] px-2 py-0">
               {cp.ageMin}m ago
             </Badge>
-            <p className="text-xs text-muted-foreground leading-relaxed line-clamp-3">
-              {cp.progress}
-            </p>
-            {cp.next_step && (
+            <div className="text-xs text-muted-foreground leading-relaxed line-clamp-3">
+              <Markdown compact>{cp.progress}</Markdown>
+            </div>
+            {cp.nextStep && (
               <div className="flex items-start gap-1.5 text-xs">
                 <ArrowRight className="size-3 mt-0.5 shrink-0 text-primary" />
-                <span className="font-medium">{cp.next_step}</span>
+                <span className="font-medium">{cp.nextStep}</span>
               </div>
             )}
           </>
@@ -107,7 +107,7 @@ function CheckpointCard({ data }: Props) {
 
 /* ── Handoff Card ───────────────────────────────────────────── */
 
-function HandoffCard({ data }: Props) {
+function HandoffCard({ data }: { data: DashboardData }) {
   const [open, setOpen] = useState(false)
   const h = data.lastHandoff
   return (
@@ -127,20 +127,16 @@ function HandoffCard({ data }: Props) {
               </DialogTrigger>
               <DialogContent className="max-w-2xl max-h-[80vh]">
                 <DialogHeader>
-                  <DialogTitle>Session Handoff — {new Date(h.ended_at + 'Z').toLocaleDateString()}</DialogTitle>
+                  <DialogTitle>Session Handoff — {new Date(h.createdAt).toLocaleDateString()}</DialogTitle>
                 </DialogHeader>
                 <ScrollArea className="h-[60vh] pr-4">
-                  <div className="text-[13px] leading-7 whitespace-pre-wrap">
-                    {h.handoff_note || 'No handoff note.'}
-                  </div>
-                  {h.files_touched && (
+                  <Markdown>{h.summary || 'No handoff note.'}</Markdown>
+                  {h.blockers && h.blockers.length > 0 && (
                     <div className="mt-4 pt-3 border-t">
-                      <div className="text-xs font-semibold mb-2">Files touched</div>
-                      <div className="flex flex-wrap gap-1">
-                        {h.files_touched.split('\n').filter(Boolean).map((f, i) => (
-                          <Badge key={i} variant="secondary" className="text-[10px] font-mono px-2 py-0">{f}</Badge>
-                        ))}
-                      </div>
+                      <div className="text-xs font-semibold mb-2">Blockers</div>
+                      <ul className="list-disc list-inside text-muted-foreground text-sm">
+                        {h.blockers.map((b, i) => <li key={i}>{b}</li>)}
+                      </ul>
                     </div>
                   )}
                 </ScrollArea>
@@ -153,10 +149,10 @@ function HandoffCard({ data }: Props) {
         {h ? (
           <>
             <Badge variant="secondary" className="text-[10px] px-2 py-0">
-              {new Date(h.ended_at + 'Z').toLocaleDateString()}
+              {new Date(h.createdAt).toLocaleDateString()}
             </Badge>
             <p className="text-xs text-muted-foreground leading-relaxed line-clamp-4">
-              {h.handoff_note?.slice(0, 300) || 'No note'}
+              {h.summary?.slice(0, 300) || 'No note'}
             </p>
           </>
         ) : (
@@ -242,7 +238,7 @@ function ActivePlansCard({ plans }: { plans: Plan[] }) {
 /* ── Open Questions Card ────────────────────────────────────── */
 
 function OpenQuestionsCard({ questions }: { questions: DashboardData['questions'] }) {
-  const open = questions.filter(q => q.status === 'open')
+  const open = questions.filter(q => !q.resolvedAt)
   if (open.length === 0) return null
 
   return (
@@ -265,7 +261,7 @@ function OpenQuestionsCard({ questions }: { questions: DashboardData['questions'
             <Badge className="text-[9px] px-1.5 py-0 bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300 shrink-0 mt-0.5">
               ?
             </Badge>
-            <span className="leading-relaxed">{q.question}</span>
+            <span className="leading-relaxed">{q.text}</span>
           </div>
         ))}
       </CardContent>
@@ -286,15 +282,18 @@ function Row({ label, value, children }: { label: string; value?: string; childr
 
 /* ── Page ───────────────────────────────────────────────────── */
 
-export function OverviewPage({ data }: Props) {
+export function OverviewPage() {
+  const data = useDashboardStore(s => s.data)
+  if (!data) return null
+
   const taskCounts = {
     todo: data.tasks.todo.length,
     inProgress: data.tasks.inProgress.length,
     done: data.tasks.done.length,
   }
   const totalTasks = taskCounts.todo + taskCounts.inProgress + taskCounts.done
-  const activeDecisions = data.decisions.filter(d => !d.superseded_by).length
-  const activeObs = data.observations.filter(o => !o.resolved_at).length
+  const activeDecisions = data.decisions.filter(d => !d.supersededById).length
+  const activeObs = data.observations.filter(o => !o.resolvedAt).length
 
   return (
     <div className="p-6 max-w-[1200px] mx-auto space-y-5">
