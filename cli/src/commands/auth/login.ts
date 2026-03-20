@@ -52,6 +52,9 @@ export interface AuthResult {
 
 export async function browserAuthFlow(apiUrl: string): Promise<AuthResult> {
   return new Promise((resolve, reject) => {
+    // Track open connections so we can destroy them on close
+    const connections = new Set<import('node:net').Socket>()
+
     // Start a temporary local HTTP server to receive the callback
     const server = createServer((req, res) => {
       // CORS for the browser login page
@@ -73,8 +76,12 @@ export async function browserAuthFlow(apiUrl: string): Promise<AuthResult> {
             const data = JSON.parse(body) as AuthResult
             res.writeHead(200, { 'Content-Type': 'application/json' })
             res.end(JSON.stringify({ ok: true }))
-            server.close()
             clearTimeout(timeout)
+            // Destroy all open sockets so the process can exit
+            for (const socket of connections) {
+              socket.destroy()
+            }
+            server.close()
             resolve(data)
           } catch {
             res.writeHead(400, { 'Content-Type': 'application/json' })
@@ -86,6 +93,12 @@ export async function browserAuthFlow(apiUrl: string): Promise<AuthResult> {
 
       res.writeHead(404)
       res.end()
+    })
+
+    // Track connections for forced cleanup
+    server.on('connection', (socket) => {
+      connections.add(socket)
+      socket.on('close', () => connections.delete(socket))
     })
 
     server.listen(0, '127.0.0.1', () => {
@@ -114,6 +127,9 @@ export async function browserAuthFlow(apiUrl: string): Promise<AuthResult> {
 
     // Timeout after 5 minutes
     const timeout = setTimeout(() => {
+      for (const socket of connections) {
+        socket.destroy()
+      }
       server.close()
       reject(new Error('Login timed out after 5 minutes'))
     }, 5 * 60 * 1000)
