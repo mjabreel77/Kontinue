@@ -216,7 +216,7 @@ export default class Init extends Command {
       ?? await input({ message: 'Tech stack (optional, e.g. "TypeScript, Next.js, Postgres"):', default: '' })
 
     // Check if a project with this path already exists
-    const existingProjects = await KontinueApiClient.listProjects(apiUrl, workspaceId)
+    const existingProjects = await KontinueApiClient.listProjects(apiUrl, workspaceId, token)
     const existingRemote = existingProjects.find((p: any) => p.path === cwd)
     let projectId: string
 
@@ -225,7 +225,7 @@ export default class Init extends Command {
       ok(`Found existing remote project "${existingRemote.name}" for this path`)
     } else {
       ok(`Creating project "${name}" on server...`)
-      const project = await KontinueApiClient.createProject(apiUrl, workspaceId, name, cwd)
+      const project = await KontinueApiClient.createProject(apiUrl, workspaceId, name, cwd, token)
       projectId = project.id
       ok(`Project created: ${projectId}`)
     }

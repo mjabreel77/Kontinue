@@ -348,16 +348,20 @@ export class KontinueApiClient {
     return res.json()
   }
 
-  static async listProjects(baseUrl: string, workspaceId: string): Promise<any[]> {
-    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/api/workspaces/${workspaceId}/projects`)
+  static async listProjects(baseUrl: string, workspaceId: string, token?: string): Promise<any[]> {
+    const headers: Record<string, string> = {}
+    if (token) headers['Authorization'] = `Bearer ${token}`
+    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/api/workspaces/${workspaceId}/projects`, { headers })
     if (!res.ok) throw new Error(`Failed to list projects: ${res.status}`)
     return res.json() as Promise<any[]>
   }
 
-  static async createProject(baseUrl: string, workspaceId: string, name: string, path?: string): Promise<any> {
+  static async createProject(baseUrl: string, workspaceId: string, name: string, path?: string, token?: string): Promise<any> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token) headers['Authorization'] = `Bearer ${token}`
     const res = await fetch(`${baseUrl.replace(/\/$/, '')}/api/workspaces/${workspaceId}/projects`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ name, path }),
     })
     if (!res.ok) {
